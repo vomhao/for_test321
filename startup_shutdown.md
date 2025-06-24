@@ -110,7 +110,7 @@ key: oracle -- servers -- Server & Mount Points & Startup_Shutdown
     ```
 
 # For Startup
-## panther
+## ps_prod_db
 - ``oracle``: start other listener, enter these commands
     ```
     export ORACLE_HOME=/u01/app/oracle/product/19.3.0
