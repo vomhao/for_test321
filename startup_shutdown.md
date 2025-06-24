@@ -76,6 +76,7 @@ key: oracle -- servers -- Server & Mount Points & Startup_Shutdown
     ```
 
 ## other databases
+- do like ps_prod_db
 ```
   Host       | DB
   -----------|----------
@@ -84,30 +85,7 @@ key: oracle -- servers -- Server & Mount Points & Startup_Shutdown
   ps_wms_db  | PSWMS92
 ```
 
-- ``oracle``: check listener
-    ```
-    ps -ef | grep LISTENER
-        oracle     4892      1  0 Apr13 ?        00:06:51 /u01/app/oracle/product/12.1.0.2//bin/tnslsnr LISTENER -inherit
-        oracle    16565      1  0 Apr13 ?        00:01:52 /u01/app/oracle/product/19.3.0/bin/tnslsnr LISTENER_GTW19C -inherit
-    ```
 
-- ``oracle``: check how many oracle pmon process
-    ```sql
-    pmon
-        oracle     2329      1  0 Jul07 ?        00:00:52 ora_pmon_PSTEST92
-        4 Database(s)
-    ```
-
-- ``oracle``: Shutdown all DB: pstest92, pswms92, psdev92, pslink92
-    ```sql
-    at linux prompt, enter command:
-        pstest92
-        sqli
-    at sql prompt:
-        alter system switch logfile;
-        shutdown immediate;
-        exit;
-    ```
 
 # For Startup
 ## ps_prod_db
