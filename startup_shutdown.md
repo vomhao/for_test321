@@ -1,4 +1,3 @@
-key: oracle -- servers -- Server & Mount Points & Startup_Shutdown
 # For Shutdown
 ## ps_rman_netbackup
 - ``root``: stop netbackup
