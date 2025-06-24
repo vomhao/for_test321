@@ -142,9 +142,9 @@ key: oracle -- servers -- Server & Mount Points & Startup_Shutdown
 # Restart Web,App,Prcs
 - restart web, app, prcs server
 ```sh
-#login into these 3 server: psprodweb, psprodapp and psprodprcs
+# login into these 3 servers: psprodweb, psprodapp and psprodprcs
 # enter this command to re-start server for each server
-stop_start.sh
+    stop_start.sh
 ```
 
 
