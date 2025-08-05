@@ -232,7 +232,7 @@
     ```
 
 # GRYPH - Normal
-- ``Note``: All GRYPH rule are mostly copied from KAPCO exept this rule below
+- ``Note``: All GRYPH rules are mostly copied from KAPCO exept this rule below
 ## UPS - USA - O  
 - ``Parameters``
     ```
