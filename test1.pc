@@ -1,0 +1,3505 @@
+/*kaplan -- hvo -- 2020-06-17 -- Replade / with - */
+
+/* Ths class implements the shortage workbench core functionality
+*
+* @version 1.0
+* @author SRajan
+* Convention:
+* Variables:   X_YZ_name:  Where
+                              X is l: local, g:global, i: instance variable, a: argument of a function
+                              Y is a: if array  blank otherwise
+                              Z is Data type: s: String, i:integer, d: date, t: time, dt:datetime
+                                              fld: field, rec:record,row:row,rset:rowset
+                                              o: user defined/PT classes, a:any
+*/
+
+/* 08/13/03:SSR: Commented out lead days defaulting */
+/* 07/14/05:SSR: FA issue #138.planned release qty computation was not correct for non-soft non-atp item */
+/* 07/12/05:SSR: CHanged parameter to sql stmt in gotoitemview method*/
+rem =================================================================================;
+rem Date      Initials  Issue #    Description                                       ;
+rem 08022007  LG        1673308000 Included field BCKORDER_FLAG in whereclause       ;
+rem                                string in methods GotoDemandLines                 ;
+rem                                and GotoItemView                                  ;
+rem 03092009  PHK       1836190001 Modified SQL in method RetrieveDemandDynamic      ;
+rem                                to improve the performance                        ;
+rem 12112009  CHB       1936645002 Modified SQL in method RetrieveDemandDynamic so   ;
+rem                                there is no SQL error when searching with demand  ;
+rem =================================================================================;
+/* 09/21/09 MEG CN#IN910 - In method AddDropDownItem when assigning &l_s_effsql use A_ED.EFF_STATUS instead of A.EFF_STATUS. */
+
+
+import IN_GENERAL:*;
+import IN_GENERAL:IN_TEMPLATE:*;
+import SF_TOOLS:*;
+import IN_SW_PROCESSOR:*;
+
+import IN_INTERFACE:FulfillmentRequest;
+import IN_FULFIL:Constants:FulfilStates;
+import IN_FULFIL:Constants:FulfilStateSQL;
+import SCM_IN_COMMON:UOMConversion;
+
+<*import SCM_ALMINV:EWN;*>
+
+class SWPROCESSOR
+   /* Constructor */
+   method SWPROCESSOR();
+   method init_templateprocessorSWProcessor(&a_rset_lvl0 As Rowset);
+   method GetSelectionTemplate() Returns IN_GENERAL:IN_TEMPLATE:TemplateProcessor;
+   method retrieve_template_all_usage();
+   method format_selection_template_display(&a_s_usage_type As string) Returns integer;
+   method SelectionDemandCount();
+   method SetPromptSQL();
+   method GenerateStateSQL() Returns string;
+   
+   /* goto dropdown processing */
+   method GotoProcessing(&a_s_page As string, &a_fld_gotoaction As Field);
+   method GotoDemandLines(&a_s_mode As string, &a_row_order As Row, &a_s_where_clause As string);
+   method GotoItemView(&a_s_mode As string, &a_row_order As Row, &a_s_where_clause As string);
+   method GotoHyperlinkControl(&a_s_page As string);
+   method GotoProcessingHyperlink(&a_s_page As string, &a_s_mode As string);
+   method GotoKitSchedule();
+   method RefreshOrders(&a_s_sql As string) Returns boolean; /* retrieve order list */
+   method RetrieveDemandDynamic(&a_rset_dmnd As Rowset, &a_s_resultset As string, &a_s_sql As string) Returns integer;
+   method RetrievDemandLinesFromSelectedOrders(&a_rset_orders As Rowset, &a_rset_demand As Rowset out) Returns integer;
+   
+   rem method SelectAllProcessing(&a_s_page As string, &a_fld_gotoaction As Field);
+   method SelectAllProcessingHyperlink(&a_s_page As string, &a_fld_gotoaction As Field);
+   method AddDropDownItem(&a_fld_temp As Field, &a_s_fldname As string, &a_as_validfldvalues As array of string, &a_b_longdescr As boolean);
+   method ControlPeggingDDLB(&a_row_dmnd As Row) Returns string;
+   method ControlAPPROVALDDLB() Returns string;
+   method SetDisplayRowsetToSelection();
+   /*Methods prorate the the avail qty across multiple demand lines*/
+   method ProrateQty();
+   
+   method GetInUtilities() Returns IN_GENERAL:INUtilities;
+   method GetFulfilStateSQL() Returns IN_FULFIL:Constants:FulfilStateSQL;
+   method GetPopUpSearch() Returns IN_GENERAL:PopUpSearch;
+   method GetActionHandler() Returns IN_SW_PROCESSOR:SWActionHandler;
+   
+   method GetAutoPartialApproval() Returns string;
+   
+   method UOMconvert(&a_s_itemid As string, &a_s_uom_base As string, &a_s_uom_from As string, &a_s_uom_to As string, &a_n_qty_from As number, &a_n_qty_to As number out);
+   method UOMconvertWithMSG(&a_s_itemid As string, &a_s_uom_base As string, &a_s_uom_from As string, &a_s_uom_to As string, &a_n_qty_from As number, &a_n_qty_to As number out) Returns boolean;
+   method AutoRefreshDataAfterActionEnd();
+   
+   method CheckifNewRows(&a_rset_temp As Rowset, &a_s_recname As string, &a_s_fldname As string,) Returns boolean;
+   
+   /* Generate priority ranking for demand lines in  a rowset*/
+   method AssignPriorityRankingRowset(&a_rset_demandlines As Rowset, &a_s_recordname As string, &a_s_fieldname As string);
+   method SetALMPromptSQL();
+   method SelectcontrolforKitSUmmary();
+   
+   method ComputeCompleteKitQty(&a_rec_kitdtl As Record) Returns number;
+   method DefaultReasonCD(&a_rset_demandlines As Rowset, &a_rec_dfltrecordname As Record);
+   method GotoKitScheduleInline(&a_s_kitid_sql As string, &a_i_currentrow As integer) Returns boolean;
+   method CollapseExpandKitSchedule(&a_b_expand As boolean);
+   
+   /* template control properties */
+   property string Category;
+   property string BusinessUnit;
+   property string TemplateCode;
+   property string TemplateId;
+   property string CurrSelSubCat;
+   property Rowset Lvl0Rowset;
+   property Rowset ShopCart;
+   property boolean NewGroup;
+   property integer GRP_SEQ_NBR;
+   property string IN_TM_USAGE_TYPE1;
+   property string PriorPage;
+   property integer LogMaxRows;
+   property string DefaultCAT;
+   property string Kitreleasemultiple;
+   property string PromptForReasonCode;
+   
+   /*  workcenter flags, to allow multiple selections */
+   property boolean p_bInitFromWorkcenter;
+   property boolean p_bFlushDemandLines;
+   property boolean p_bShowDemandLinesPage;
+   
+private
+   
+   method GotoOrder();
+   
+   method GotoSelection(&a_s_currentpage As string, &a_fld_gotoaction As Field);
+   method gotocart(&a_s_currentpage As string, &a_fld_gotoaction As Field);
+   method RetrieveOrders(&a_rset_demand As Rowset, &a_s_demand_field As string, &a_s_demand_record As string, &a_s_demand_record_where As string, &a_as_control As array of array of string, &a_i_startrow As integer, &a_s_state As string, &a_b_execute_where As boolean, &a_b_eval_state As boolean, &a_s_exclude As string) Returns integer;
+   method GetDemandCount(&a_s_demand_field As string, &a_s_demand_record As string, &a_s_demand_record_where As string, &a_as_control As array of array of string, &a_b_eval_state As boolean) Returns integer;
+   method GetRouteGroupSQL() Returns string;
+   method GetOrderRequestWhereClause() Returns string;
+   method SetDemandLinesQty(&a_rset_dmndlines As Rowset);
+   method SetDemandLinesQtyNonBuffer(&a_rset_dmndlines As Rowset);
+   
+   method SetDemandKeyDynamicPromptUtlility1(&a_s_fldname As string, &a_s_sql As string, &a_b_atleastone As boolean);
+   method CheckifNewRowsSelected(&a_rset_temp As Rowset, &a_s_recname As string, &a_s_fldname As string,) Returns boolean;
+   method PostAddToCartProcessing(&a_rset_temp As Rowset);
+   
+   method CheckOrderRequestDay();
+   method OrderRequestValidation(&a_s_order_request As string, &a_d_from_date As date, &a_d_to_date As date) Returns integer;
+   method UseLeadDaysValidation(&a_s_override_flg As string, &a_s_use_lead_days As string, &a_i_leaddays As integer, &a_i_maxleaddays As integer, &a_i_alocdays As integer, &a_d_from_date As date, &a_d_to_date As date) Returns integer;
+   
+   
+   method Create2dCtrlArray(&a_s_category As string, &a_s_subcategory As string, &a_s_whereclause As string) Returns array of array of string;
+   method BuildSQLforOrderRetrieval(&a_as_subset As array of array of string, &a_s_fromstate As string, &a_s_state_constant As string, &a_s_where As string) Returns string;
+   method RetrieveAllStatesUnPacked(&a_rset_dmnd As Rowset, &a_s_sqlwhere As string out, &a_s_record As string, &a_b_retrieve As boolean) Returns integer;
+   
+   /*Controls what action are displayed in the actions drop down list based on the template definition */
+   method ControlActionsDDLB(&a_fld_action As Field);
+   
+   
+   /* Build sub query for search data not based on IN_DEMAND*/
+   method GetSubSelectSQL(&a_s_fldname As string, &a_s_subselect_sql As string) Returns string;
+   
+   method FormatOrderSummary(&a_b_hiderowsetifempty As boolean) Returns boolean;
+   
+   method VisibleEnableDemandFilter();
+   /* instances*/
+   instance IN_SW_PROCESSOR:SWTemplateListener &i_o_SWTemplateListener;
+   instance IN_SW_PROCESSOR:SWActionHandler &i_o_SWActionHandler;
+   instance SF_TOOLS:RowSetSearch &i_o_search;
+   instance IN_GENERAL:IN_TEMPLATE:TemplateProcessor &i_o_SelectionTemplate;
+   instance IN_GENERAL:PopUpSearch &i_o_PopUpSearch;
+   instance IN_GENERAL:INUtilities &i_o_INUtilities;
+   instance IN_FULFIL:Constants:FulfilStates &i_o_demandstates;
+   instance IN_FULFIL:Constants:FulfilStateSQL &i_o_demandstatesql;
+   
+   instance SCM_IN_COMMON:UOMConversion &i_o_uomconversion;
+   instance IN_SW_PROCESSOR:IN_SW_MISC &i_o_sw_misc;
+   
+   /* rowset */
+   instance Rowset &i_rset_lvl0, &i_rset_grp, &i_rset_dtl;
+   instance Rowset &i_rset_selection_display;
+   
+   /* arrays */
+   instance array of array of string &i_as_unfulfil, &i_as_releasable, &i_as_pending, &i_as_lineactionxlats;
+   instance array of string &i_as_grpfld, &i_as_dtlfld;
+   
+   /* cached for repeat use variables */
+   instance string &i_s_setid_item, &i_s_def_lot_id, &i_s_def_serial_id;
+   instance string &i_s_softalloc_flg, &i_s_final_sort;
+   instance date &i_d_def_stg_date;
+   instance integer &i_i_maxleaddays, &i_i_leaddays;
+   instance string &i_s_order_sql, &i_s_lineaction;
+   instance string &i_s_auto_round_opt, &i_s_autorefresh, &i_s_override_flg, &i_s_auto_partial_approval, &i_s_VMI_UNIT_FLG;
+   instance boolean &i_b_PEG_MSR, &i_b_PEG_XFR, &i_b_PEG_SO, &i_b_PEG_WSM;
+   instance string &i_s_approvallist, &i_s_AUTO_DEMD_APPROVE, &i_s_AUTO_BCK_APPROVE, &i_s_AUTO_PRT_APPROVE;
+   
+end-class;
+
+<**** SSR 890 Function OK ***>
+/**
+* Constructor:   intiatializes template processor, row set search class, popup search class and
+* inventory utilities. Also caches default serial and lot id
+* @param  None
+* @return none
+*
+*/
+method SWPROCESSOR
+   %This.TemplateCode = "SHORT_WRKBENCH";
+   &i_o_SelectionTemplate = create IN_GENERAL:IN_TEMPLATE:TemplateProcessor();
+   &i_o_search = create SF_TOOLS:RowSetSearch();
+   &i_o_PopUpSearch = create IN_GENERAL:PopUpSearch();
+   &i_o_INUtilities = create IN_GENERAL:INUtilities();
+   &i_o_demandstates = create IN_FULFIL:Constants:FulfilStates();
+   &i_o_demandstatesql = create IN_FULFIL:Constants:FulfilStateSQL();
+   &i_o_SWActionHandler = create IN_SW_PROCESSOR:SWActionHandler(%This);
+   &i_o_uomconversion = create SCM_IN_COMMON:UOMConversion();
+   &i_o_sw_misc = create IN_SW_PROCESSOR:IN_SW_MISC();
+   /* Get inventory defaults */
+   Local string &l_s_def_lot_id, &l_s_def_serial_id;
+   Local date &l_d_def_stg_date;
+   SQLExec("select DFLT_SERIAL_ID, DFLT_INV_LOT_ID,%dateout(DFLT_STAGED_DATE) FROM PS_INSTALLATION_IN", &l_s_def_serial_id, &l_s_def_lot_id, &l_d_def_stg_date);
+   &i_s_def_serial_id = &l_s_def_serial_id;
+   &i_s_def_lot_id = &l_s_def_lot_id;
+   &i_d_def_stg_date = &l_d_def_stg_date;
+   
+   &p_bInitFromWorkcenter = False;
+   &p_bFlushDemandLines = True;
+   &p_bShowDemandLinesPage = True;
+   
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* set the reference to the display rowset for the template
+* @param  None
+* @return none
+*/
+method SetDisplayRowsetToSelection
+   %This.GetSelectionTemplate().SetDisplayRowSet(&i_rset_selection_display);
+end-method;
+
+
+
+
+<**** SSR 890 Function OK ***>
+/**
+* returns reference to inventory utilities object
+* @param  None
+ * @Return utilities object
+*/
+method GetInUtilities
+   /+ Returns IN_GENERAL:INUtilities +/
+   Return &i_o_INUtilities;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* returns reference to inventory utilities object
+* @param  None
+* @Return utilities object
+*/
+method GetFulfilStateSQL
+   /+ Returns IN_FULFIL:Constants:FulfilStateSQL +/
+   Return &i_o_demandstatesql;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* returns reference to popup search object
+* @param  None
+ * @Return popupsearch
+*/
+method GetPopUpSearch
+   /+ Returns IN_GENERAL:PopUpSearch +/
+   Return &i_o_PopUpSearch;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* returns reference to selection template
+* @param  None
+ * @Return TemplateProcessor
+*/
+method GetSelectionTemplate
+   /+ Returns IN_GENERAL:IN_TEMPLATE:TemplateProcessor +/
+   Return &i_o_SelectionTemplate;
+end-method;
+
+/**
+* returns reference to workbench action handler
+* @param  None
+ * @Return Action handler object
+*/
+method GetActionHandler
+   /+ Returns IN_SW_PROCESSOR:SWActionHandler +/
+   Return &i_o_SWActionHandler;
+end-method;
+
+/**
+* returns auto partial qty flag to workbench action handler
+* @param  None
+ * @Return Action handler object
+*/
+method GetAutoPartialApproval
+   /+ Returns String +/
+   Return &i_s_auto_partial_approval;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* initialize the workbench processor with template attributes and controls action that are valid for the template id
+   * @param  1 &a_rset_lvl0: Reference to level 0 rowset
+* @return none
+*
+*/
+method init_templateprocessorSWProcessor
+   /+ &a_rset_lvl0 as Rowset +/
+   &i_rset_lvl0 = &a_rset_lvl0;
+   Local Rowset &l_rset_selection;
+   
+   %This.Lvl0Rowset = &a_rset_lvl0;
+   
+   &i_rset_selection_display = &i_rset_lvl0(1).GetRowset(Scroll.IN_TM_TEMP_VW1);
+   %This.GetSelectionTemplate().SetDisplayRowSet(&i_rset_selection_display);
+   &i_rset_selection_display.HideAllRows();
+   
+   /* create listener */
+   &i_o_SWTemplateListener = create IN_SW_PROCESSOR:SWTemplateListener();
+   &i_o_SWTemplateListener.SetSWProcessor(%This);
+   
+   /* register listener */
+   %This.GetSelectionTemplate().TemplateListener = &i_o_SWTemplateListener;
+   
+   /* register processor with listener as we could have many processor linked to one listener */
+   %This.GetSelectionTemplate().TemplateListener.TemplateProcessor = %This.GetSelectionTemplate();
+   
+   /* set valid actions */
+   Local integer &l_i_retcode, &i, &l_i_row_count;
+   Local Rowset &l_rset_actions;
+   Local string &l_s_action, &l_s_dflt_cat;
+   Local Field &l_fld_action;
+   Local array of string &l_as_validfld = CreateArrayRept(" ", 0);
+   Local boolean &l_b_dflt_exist;
+   /* Add demand view, item view cat to the ddlb bsaed on template */
+   &l_rset_actions = CreateRowset(Record.IN_SW_SEL_7_VW);
+   &l_i_retcode = &l_rset_actions.Fill(" WHERE TEMPLATE_ID=:1", &i_rset_lvl0(1).IN_SW_SEL_1_WRK.TEMPLATE_ID.Value);
+   For &i = 1 To &l_i_retcode
+      &l_s_action = &l_rset_actions(&i).IN_SW_SEL_7_VW.IN_TM_CATEGORY.Value;
+      If &l_rset_actions(&i).IN_SW_SEL_7_VW.IN_TM_DFLT_CAT.Value = "Y" Then
+         &l_s_dflt_cat = &l_s_action;
+         &l_b_dflt_exist = True;
+      End-If;
+      Evaluate &l_s_action
+      When = "DEMANDSUMMARY"
+         &l_as_validfld.Push("1");
+         Break;
+      When = "DEMANDLINES"
+         &l_as_validfld.Push("2");
+         Break;
+      When = "ITEMVIEW"
+         &l_as_validfld.Push("3");
+         Break;
+      When-Other
+         Break;
+      End-Evaluate;
+   End-For;
+   
+   &l_fld_action = &i_rset_lvl0(1).IN_SW_SEL10_WRK.IN_SW_ACTION;
+   &l_fld_action.ClearDropDownList();
+   %This.AddDropDownItem(&l_fld_action, &l_fld_action.Name, &l_as_validfld, True);
+   
+   If Not (&l_b_dflt_exist) Then
+      &l_s_dflt_cat = "DEMANDLINES";
+   End-If;
+   %This.DefaultCAT = &l_s_dflt_cat;
+   %This.Category = &l_s_dflt_cat;
+   Evaluate &l_s_dflt_cat
+   When = "DEMANDSUMMARY"
+      &i_rset_lvl0(1).IN_SW_SEL10_WRK.IN_SW_ACTION.Value = "1";
+      Break;
+   When = "DEMANDLINES"
+      &i_rset_lvl0(1).IN_SW_SEL10_WRK.IN_SW_ACTION.Value = "2";
+      Break;
+      
+   When = "ITEMVIEW"
+      &i_rset_lvl0(1).IN_SW_SEL10_WRK.IN_SW_ACTION.Value = "3";
+      Break;
+   When-Other
+      &i_rset_lvl0(1).IN_SW_SEL10_WRK.IN_SW_ACTION.Value = "2";
+      Break;
+   End-Evaluate;
+   
+   /* Setid for the Inventory Bu */
+   Local string &l_s_bu;
+   &l_s_bu = &i_rset_lvl0(1).IN_SW_SEL_1_WRK.BUSINESS_UNIT.Value;
+   &i_s_setid_item = GetSetId("BUSINESS_UNIT", &l_s_bu, "MASTER_ITEM_TBL", "");
+   
+   /* get rounding option */
+   Local string &l_s_auto_round_opt, &l_s_VMI_UNIT_FLG;
+   SQLExec("Select AUTO_ROUND_OPT,VMI_UNIT_FLG FROM PS_BUS_UNIT_TBL_IN  WHERE BUSINESS_UNIT=:1", &l_s_bu, &l_s_auto_round_opt, &l_s_VMI_UNIT_FLG);
+   &i_s_auto_round_opt = &l_s_auto_round_opt;
+   &i_s_VMI_UNIT_FLG = &l_s_VMI_UNIT_FLG;
+   
+   
+   /* lead days option */
+   Local string &l_s_override_flg, &l_s_softalloc_flg, &l_s_final_sort, &l_s_auto_partial_approval, &l_s_Kitreleasemultiple;
+   Local integer &l_i_leaddays, &l_i_allocleaddays, &l_i_maxdays, &l_i_temp;
+   Local string &l_s_AUTO_DEMD_APPROVE, &l_s_AUTO_BCK_APPROVE, &l_s_AUTO_PRT_APPROVE;
+   SQLExec("select ALLOW_OVERRIDE_FLG, ALLOC_LEAD_DAYS,MAX_LEAD_DAYS,SOFT_ALLOC_FLG,ALLOC_SORT ,AUTO_PRT_APPROVE,IN_RLS_KMULT_FLG ,AUTO_DEMD_APPROVE,AUTO_BCK_APPROVE,AUTO_PRT_APPROVE FROM PS_DF_SETUP_INV where BUSINESS_UNIT = :1", &l_s_bu, &l_s_override_flg, &l_i_leaddays, &l_i_maxdays, &l_s_softalloc_flg, &l_s_final_sort, &l_s_auto_partial_approval, &l_s_Kitreleasemultiple, &l_s_AUTO_DEMD_APPROVE, &l_s_AUTO_BCK_APPROVE, &l_s_AUTO_PRT_APPROVE);
+   &i_i_maxleaddays = &l_i_maxdays;
+   &i_s_override_flg = &l_s_override_flg;
+   &i_i_leaddays = &l_i_leaddays;
+   &i_s_softalloc_flg = &l_s_softalloc_flg;
+   &i_s_final_sort = &l_s_final_sort;
+   &i_s_auto_partial_approval = &l_s_auto_partial_approval;
+   &i_s_AUTO_DEMD_APPROVE = &l_s_AUTO_DEMD_APPROVE;
+   &i_s_AUTO_BCK_APPROVE = &l_s_AUTO_BCK_APPROVE;
+   &i_s_AUTO_PRT_APPROVE = &l_s_AUTO_PRT_APPROVE;
+   %This.Kitreleasemultiple = &l_s_Kitreleasemultiple;
+   
+   &i_as_lineactionxlats = &i_o_INUtilities.RetrieveXlatValues("IN_SW_LINE_ACTION", True, False);
+   Local string &l_s_opr_id = %OperatorId;
+   Local string &l_s_PEG_MSR, &l_s_PEG_XFR, &l_s_PEG_SO, &l_s_PEG_WSM;
+   SQLExec("select PEG_MSR,PEG_XFR,PEG_SO,PEG_WSM FROM PS_IN_PEG_USER_SEC where OPRID = :1", %OperatorId, &l_s_PEG_MSR, &l_s_PEG_XFR, &l_s_PEG_SO, &l_s_PEG_WSM);
+   If &l_s_PEG_MSR = "N" Then
+      &i_b_PEG_MSR = True;
+   End-If;
+   If &l_s_PEG_XFR = "N" Then
+      &i_b_PEG_XFR = True;
+   End-If;
+   If &l_s_PEG_SO = "N" Then
+      &i_b_PEG_SO = True;
+   End-If;
+   If &l_s_PEG_WSM = "N" Then
+      &i_b_PEG_WSM = True;
+   End-If;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* 1. Retrieves rowset for the selection criteria for both group as well as Detail usage
+* 2. Caches rowset as well as the storage field list array to provide table specific criteria processing
+* @param  None
+* @return none
+*
+ */
+method retrieve_template_all_usage
+   Local Record &l_rec_lvl0;
+   &l_rec_lvl0 = &i_rset_lvl0(1).IN_SW_SEL_1_WRK;
+   
+   %This.BusinessUnit = &l_rec_lvl0.BUSINESS_UNIT.Value;
+   %This.TemplateId = &l_rec_lvl0.TEMPLATE_ID.Value;
+   %This.NewGroup = True;
+   
+   Local integer &l_i_retcode;
+   
+   /* retrieve Group selection template */
+   &l_i_retcode = &i_o_SelectionTemplate.RetrieveFields(%This.TemplateCode, %This.TemplateId, %This.Category, "SEARCH");
+   &i_rset_grp = &i_o_SelectionTemplate.GetStoreRowSet();
+   &i_as_grpfld = &i_o_SelectionTemplate.GetStoreRowSetFields();
+   
+   Local string &l_s_where;
+   &l_s_where = "AND TDF1.FIELDNAME IN (SELECT DISTINCT TOF1.FIELDNAME FROM PS_IN_TM_OPR_FLD TOF1 WHERE TDS1.IN_TM_CODE = TOF1.IN_TM_CODE AND TDS1.IN_TM_CATEGORY = TOF1.IN_TM_CATEGORY AND TOF1.TEMPLATE_ID ='" | %This.TemplateId | "')";
+   &i_as_unfulfil = %This.Create2dCtrlArray(%This.Category, "UNFULFIL", &l_s_where);
+   &i_as_releasable = %This.Create2dCtrlArray(%This.Category, "RELEASABLE", &l_s_where);
+   <*9.0*>
+   &i_as_pending = %This.Create2dCtrlArray(%This.Category, "PENDING", &l_s_where);
+   
+   &i_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_1_VW).Flush(); /* orders */
+   &i_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_2_VW).Flush(); /* Demand Lines */
+   &i_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_4_VW).Flush(); /* Item View*/
+   
+   Local string &l_s_actionlist = &i_o_SelectionTemplate.GetAllowedXlatValues("IN_SW_HDR_ACTION");
+   &l_s_actionlist = "('" | Substitute(&l_s_actionlist, ",", "','") | "')";
+   
+   Local Field &l_fld_temp = GetLevel0()(1).IN_SW_SEL_3_WRK.IN_SW_HDR_ACTION;
+   &i_o_INUtilities.AddDropDownItemStringList(&l_fld_temp, &l_fld_temp.Name, &l_s_actionlist, True, True);
+   
+   <* 9.0 *>
+   Local string &l_s_temp;
+   
+   &l_s_temp = &i_o_SelectionTemplate.GetDefaultFromValue("IN_SW_HDR_ACTION", " ");
+   If &l_s_temp <> " " And
+         &l_s_temp <> "" Then
+      &l_fld_temp.Value = &l_s_temp;
+   End-If;
+   
+   &l_s_actionlist = &i_o_SelectionTemplate.GetAllowedXlatValues("IN_SW_DTL_ACTION");
+   &l_s_actionlist = "('" | Substitute(&l_s_actionlist, ",", "','") | "')";
+   
+   &l_fld_temp = GetLevel0()(1).IN_SW_SEL_3_WRK.IN_SW_DTL_ACTION;
+   &i_o_INUtilities.AddDropDownItemStringList(&l_fld_temp, &l_fld_temp.Name, &l_s_actionlist, True, True);
+   
+   <* 9.0 *>
+   
+   &l_s_temp = &i_o_SelectionTemplate.GetDefaultFromValue("IN_SW_DTL_ACTION", " ");
+   If &l_s_temp <> " " And
+         &l_s_temp <> "" Then
+      &l_fld_temp.Value = &l_s_temp;
+   End-If;
+   
+   &l_s_actionlist = &i_o_SelectionTemplate.GetAllowedXlatValues("IN_SW_LINE_ACTION");
+   &i_s_lineaction = &l_s_actionlist;
+   
+   Local string &l_s_approvallist = &i_o_SelectionTemplate.GetAllowedXlatValues("IN_SW_APPROVE");
+   &i_s_approvallist = &l_s_approvallist;
+   
+   
+   /* autorefresh of data after action */
+   &i_s_autorefresh = &i_o_SelectionTemplate.GetDefaultFromValue("IN_SW_REFRESH_DATA", "N");
+   
+   /* get max rows in process log */
+   %This.LogMaxRows = &i_o_SelectionTemplate.GetDefaultFromValue("IN_SW_LOGMAXLN", 300);
+   
+   /* get reason code control from template as well as from EWN */
+   Local string &l_s_prompt_reason = &i_o_SelectionTemplate.GetDefaultFromValue("IN_SW_PRMPT_REASON", "N");
+   %This.PromptForReasonCode = &l_s_prompt_reason;
+   
+   If %This.PromptForReasonCode = "" Or
+         %This.PromptForReasonCode = " " Then
+      %This.PromptForReasonCode = "N";
+   End-If;
+   If %This.PromptForReasonCode = "N" Then
+      GetLevel0()(1).IN_SW_SEL_4_WRK.REASON_CD.Visible = False;
+      GetLevel0()(1).IN_SW_SEL_4_WRK.COMMENTS_254.Visible = False;
+      GetLevel0()(1).IN_SW_SEL_4_WRK.EOCM_RULE_DEFAULT.Visible = False;
+   Else
+      GetLevel0()(1).IN_SW_SEL_4_WRK.REASON_CD.Visible = True;
+      GetLevel0()(1).IN_SW_SEL_4_WRK.COMMENTS_254.Visible = True;
+      GetLevel0()(1).IN_SW_SEL_4_WRK.EOCM_RULE_DEFAULT.Visible = True;
+   End-If;
+   
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* Formats the template displayed on the selection page as well setting the dynamic prompting for demand fields
+   * @param  1 &a_s_usage_type :
+   * @return -1: if not group or detail, 0: if no rows, 1:sucess
+*
+*/
+method format_selection_template_display
+   /+ &a_s_usage_type as String +/
+   /+ Returns Integer +/
+   
+   Local string &l_s_demand_flg;
+   Local integer &l_i_retcode;
+   &i_o_SelectionTemplate.SetStoreRowSet(&i_rset_grp);
+   &i_o_SelectionTemplate.SetStoreRowSetFields(&i_as_grpfld);
+   
+   If &i_o_SelectionTemplate.GetDisplayRowSet() = Null Or
+         &i_o_SelectionTemplate.GetStoreRowSetFields() = Null Then
+      Return 0;
+   End-If;
+   &i_o_SelectionTemplate.GetDisplayRowSet().Flush();
+   &l_i_retcode = &i_o_SelectionTemplate.FormatDisplay();
+   
+   Local Record &l_rec_lvl0;
+   &l_rec_lvl0 = %This.Lvl0Rowset.GetRow(1).IN_SW_SEL_3_WRK;
+   
+   
+   /* if reserve then hide Lead Days if BU fulfillment setup is OFF  */
+   If &i_s_override_flg <> "Y" Then
+      &i_o_SelectionTemplate.DisplayVisibleEnable("LEAD_DAYS", "ENABLED", False);
+      &i_o_SelectionTemplate.DisplayVisibleEnable("USE_LEAD_DAYS", "ENABLED", False);
+   Else
+      &i_o_SelectionTemplate.DisplayVisibleEnable("LEAD_DAYS", "ENABLED", True);
+      &i_o_SelectionTemplate.DisplayVisibleEnable("USE_LEAD_DAYS", "ENABLED", True);
+   End-If;
+   
+   Local integer &l_i_temp, &l_i_leaddays;
+   Local array of string &l_as_validfld;
+   If &l_i_retcode = 1 Then
+      IN_SW_SEL_3_WRK.SELECT_UNFULFILLED = &i_o_SelectionTemplate.GetValueNullDefault("SELECT_UNFULFILLED", "N");
+      IN_SW_SEL_3_WRK.SELECT_RELEASABLE = &i_o_SelectionTemplate.GetValueNullDefault("SELECT_RELEASABLE", "N");
+      <*9.0 *>
+      IN_SW_SEL_3_WRK.SELECT_WOLINES = &i_o_SelectionTemplate.GetValueNullDefault("SELECT_WOLINES", "N");
+      
+      IN_SW_SEL_3_WRK.IN_SW_DIS_RSRV = &i_o_SelectionTemplate.GetValueNullDefault("IN_SW_DIS_RSRV", "N");
+      IN_SW_SEL_3_WRK.IN_SW_SHWITEM = &i_o_SelectionTemplate.GetValueNullDefault("IN_SW_SHWITEM", "N");
+      IN_SW_SEL_3_WRK.IN_SW_PEGGED_LINES = &i_o_SelectionTemplate.GetValueNullDefault("IN_SW_PEGGED_LINES", "N");
+      IN_SW_SEL_3_WRK.IN_SW_DISP_SHORT = &i_o_SelectionTemplate.GetValueNullDefault("IN_SW_DISP_SHORT", "N");
+      IN_SW_SEL_3_WRK.IN_SW_INCL_BCKORD = &i_o_SelectionTemplate.GetValueNullDefault("IN_SW_INCL_BCKORD", "N");
+      IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV = &i_o_SelectionTemplate.GetValueNullDefault("IN_SW_INCL_PRERRV", "0");
+      
+      &l_i_retcode = &i_o_SelectionTemplate.SetDisplayRowsetValue("IN_SW_INCL_PRERRV", IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV);
+      &l_i_retcode = &i_o_SelectionTemplate.SetDisplayRowsetValue("IN_SW_SHWITEM", IN_SW_SEL_3_WRK.IN_SW_SHWITEM);
+      %This.SetPromptSQL();
+      %This.VisibleEnableDemandFilter();
+      Return 1;
+   Else
+      MessageBox(0, "", 11100, 1954, "Template Definition does not exist.");
+      &l_rec_lvl0.CLEAR_BUTTON.Visible = False;
+      Return 0;
+   End-If;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+  * Check if a row has been selected and a value in the field exists
+  *
+  * @param 1 &a_rset_temp: Name of the rowset
+  * @param 2 &a_s_recname: Name of the record
+  * @param 3 &a_s_fldname: Name of the field
+  * @param 4 &a_a_value:  Value of the field to be set
+  * @return None
+  */
+method CheckifNewRows
+   /+ &a_rset_temp as Rowset, +/
+   /+ &a_s_recname as String, +/
+   /+ &a_s_fldname as String +/
+   /+ Returns Boolean +/
+   
+   Local number &l_i_max, &i, &l_i_rowcount;
+   &l_i_rowcount = &a_rset_temp.ActiveRowCount;
+   &i = 1;
+   Local boolean &l_b_ordersexists;
+   While &i <= &l_i_rowcount
+      If All(&a_rset_temp(&i).GetRecord(@("Record." | &a_s_recname)).GetField(@("Field." | &a_s_fldname)).Value) Then
+         Return True;
+      End-If;
+      &i = &i + 1;
+   End-While;
+   Return False;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+  * Check if a row has been selected and a value in the field exists
+  *
+  * @param 1 &a_rset_temp: Name of the rowset
+  * @param 2 &a_s_recname: Name of the record
+  * @param 3 &a_s_fldname: Name of the field
+  * @param 4 &a_a_value:  Value of the field to be set
+  * @return None
+  */
+method CheckifNewRowsSelected
+   /+ &a_rset_temp as Rowset, +/
+   /+ &a_s_recname as String, +/
+   /+ &a_s_fldname as String +/
+   /+ Returns Boolean +/
+   
+   Local number &l_i_max, &i, &l_i_rowcount;
+   &l_i_rowcount = &a_rset_temp.ActiveRowCount;
+   &i = 1;
+   Local boolean &l_b_ordersexists;
+   While &i <= &l_i_rowcount
+      If &a_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Enabled And
+            &a_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "Y" And
+            All(&a_rset_temp(&i).GetRecord(@("Record." | &a_s_recname)).GetField(@("Field." | &a_s_fldname)).Value) Then
+         Return True;
+      End-If;
+      &i = &i + 1;
+   End-While;
+   Return False;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* Wrapper function for all gotoprocessing
+   * @param  1 &a_s_page: current Page name
+   * @param  2 &a_fld_gotoactionField: Field that called this function
+* @return none
+*
+*/
+method GotoProcessing
+   /+ &a_s_page as String, +/
+   /+ &a_fld_gotoaction as Field +/
+   
+   Local string &l_s_temp, &l_s_temp1;
+   Local integer &l_i_retcode;
+   Local Record &l_rec_temp, &l_rec_bct;
+   Local Rowset &l_rset_lvl0;
+   &l_rset_lvl0 = %This.Lvl0Rowset;
+   Evaluate &a_fld_gotoaction.Value
+   When = "01" /* go to order */
+      Evaluate &a_s_page
+      When = "IN_SW_SELECTION"
+         %This.GotoOrder();
+         Break;
+      When-Other
+         Local boolean &l_b_ordersexists, &l_b_cntrexists;
+         
+         &l_b_ordersexists = %This.CheckifNewRows(&l_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_1_VW), "IN_SW_ORDP_1_VW", "BUSINESS_UNIT");
+         &l_b_cntrexists = %This.CheckifNewRows(&l_rset_lvl0(1).GetRowset(Scroll.SHIP_CNTR_DVW08), "SHIP_CNTR_DVW08", "BUSINESS_UNIT");
+         If &l_b_ordersexists Or
+               &l_b_cntrexists Then
+            Page.IN_SW_ORDERPOOL.Visible = True;
+            TransferPage(Page.IN_SW_ORDERPOOL);
+         Else
+            MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria.");
+         End-If;
+         Break;
+      End-Evaluate;
+   When = "02" /* go to demand lines*/
+      Evaluate &a_s_page
+      When = "IN_SW_SELECTION"
+         %This.GotoDemandLines("2", GetLevel0()(1), " ");
+         Break;
+      When-Other /* = "IN_SW_DEMANDLOC" */
+         If &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE") Then
+            Page.IN_SW_DEMANDLINES.Visible = True;
+            TransferPage(Page.IN_SW_DEMANDLINES);
+         Else
+            /*ADD Message that no rows match this search conditions */
+            MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria");
+         End-If;
+         Break;
+      End-Evaluate;
+      Break;
+   When = "03" /* go to Item View*/
+      Evaluate &a_s_page
+      When = "IN_SW_SELECTION"
+         %This.GotoDemandLines("3", GetLevel0()(1), " ");
+         Break;
+      When-Other /* = "IN_SW_DEMANDLOC" */
+         If &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE") Then
+            Page.IN_SW_DEMANDLINES.Visible = True;
+            TransferPage(Page.IN_SW_ITEMVIEW);
+         Else
+            /*ADD Message that no rows match this search conditions */
+            MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria");
+         End-If;
+         Break;
+      End-Evaluate;
+      Break;
+   When = "04" /* go to workbench*/
+      %This.GotoSelection(&a_s_page, &a_fld_gotoaction);
+      Break;
+   When = "06" /* go to Request Cart*/
+      %This.gotocart(&a_s_page, &a_fld_gotoaction);
+      Break;
+   End-Evaluate;
+end-method;
+
+/**
+ * This function mimics the logic in the reservation as well as the shipping request run control pages for validating the order request field and the date_from field data. There are four possible optio for the Order request field and the logic checks if the date_from is consitent with the order request selection
+*
+* @param  None
+* @return none
+*/
+method CheckOrderRequestDay
+   
+   Local string &l_s_order_request, &l_s_use_lead_days, &l_s_temp;
+   Local integer &l_i_leaddays;
+   Local date &l_d_from, &l_d_to;
+   
+   &l_s_order_request = &i_o_SelectionTemplate.GetValue("ORDER_REQUEST");
+   
+   &l_s_temp = &i_o_SelectionTemplate.GetValue("DATE_FROM");
+   If All(&l_s_temp) And
+         IsDate(&l_s_temp) Then
+      &l_d_from = Date(&l_s_temp);
+   End-If;
+   
+   &l_s_temp = &i_o_SelectionTemplate.GetValueTo("DATE_FROM");
+   If All(&l_s_temp) And
+         IsDate(&l_s_temp) Then
+      &l_d_to = Date(&l_s_temp);
+   End-If;
+   
+   &l_s_use_lead_days = &i_o_SelectionTemplate.GetValue("USE_LEAD_DAYS");
+   
+   &l_s_temp = &i_o_SelectionTemplate.GetValue("LEAD_DAYS");
+   If All(&l_s_temp) And
+         IsNumber(&l_s_temp) Then
+      &l_i_leaddays = Value(&l_s_temp);
+   End-If;
+   
+   If %This.OrderRequestValidation(&l_s_order_request, &l_d_from, &l_d_to) < 1 Then
+      Return;
+   End-If;
+   
+   If %This.UseLeadDaysValidation(&i_s_override_flg, &l_s_use_lead_days, &l_i_leaddays, &i_i_maxleaddays, &i_i_leaddays, &l_d_from, &l_d_to) < 1 Then
+      Return;
+   End-If;
+end-method;
+
+/**
+* RUN_CNTL_IN_FUL
+ * This function mimics the logic in the reservation as well as the shipping request run control pages
+* for validating the order request field and the date_from field data. There are four possible option
+* for the Order request field and the logic checks if the date_from is consitent with the order
+* request selection
+*
+* @param  1 &a_s_order_request: Order request
+  * @param  2 &a_d_from_date: From date
+  * @param  3 &a_d_to_date: To date
+  * @return <0 if error, 1: success
+*/
+method OrderRequestValidation
+   /+ &a_s_order_request as String, +/
+   /+ &a_d_from_date as Date, +/
+   /+ &a_d_to_date as Date +/
+   /+ Returns Integer +/
+   
+   /*  Error if "Reserve by Date" option is selected and no From Date is entered  */
+   If All(&a_s_order_request) And
+         &a_s_order_request = "4" And
+         (All(&a_d_from_date) Or
+            All(&a_d_to_date)) Then
+      Error MsgGet(11100, 1977, "If you choose to move all orders placed today, then no date may be specified");
+      Return - 1;
+   End-If;
+   
+   /* Error: Date is entered, but no Date Option is selected  */
+   If (All(&a_d_from_date) Or
+         All(&a_d_to_date)) And
+         None(&a_s_order_request) Then
+      Error MsgGet(11100, 1839, "You must select a Date option if you enter a date");
+      Return - 2;
+   End-If;
+   
+   If All(&a_d_from_date, &a_d_to_date) And
+         &a_d_from_date > &a_d_to_date Then
+      Error MsgGet(11100, 230, "From Date Cannot be Later than To Date");
+      Return - 3;
+   End-If;
+   
+   If (None(&a_d_from_date) And
+         None(&a_d_to_date)) And
+         (All(&a_s_order_request) And
+            &a_s_order_request <> "4") Then
+      Error MsgGet(11100, 2005, "You must select a Date option if you enter a date");
+      Return - 2;
+   End-If;
+   
+   Return 1;
+end-method;
+
+/**
+ * RUN_CNTL_IN_FUL
+ * This function mimics the logic in the reservation as well as the shipping request run control
+ * pages for validating the order request field and the date_from field data. There are four possible
+ * option for the Order request field and the logic checks if the date_from is consitent with the
+ * order request selection
+*
+* @param  1 &a_s_override_flg : Fulfilment setup Override flag
+  * @param  2 &a_s_use_lead_days :If use lead days selected
+  * @param  3 &a_i_leaddays: Lead days entered by user
+  * @param  4 &a_i_maxleaddays: maximum leads from fulfilment setup
+  * @param  5 &a_i_alocdays: Allocation lead days from fulfilment setup
+  * @param  6 &a_d_from_date: From date
+  * @param  7 &a_d_to_date: To date
+  * @return <0 if error, 1: success
+  *
+  */
+method UseLeadDaysValidation
+   /+ &a_s_override_flg as String, +/
+   /+ &a_s_use_lead_days as String, +/
+   /+ &a_i_leaddays as Integer, +/
+   /+ &a_i_maxleaddays as Integer, +/
+   /+ &a_i_alocdays as Integer, +/
+   /+ &a_d_from_date as Date, +/
+   /+ &a_d_to_date as Date +/
+   /+ Returns Integer +/
+   
+   /* Do not allow Lead Days if BU fulfillment setup is OFF  */
+   If &a_s_override_flg = "N" And
+         (&a_s_use_lead_days = "2" Or
+            &a_s_use_lead_days = "3" Or
+            All(&a_i_leaddays)) Then
+      Error (MsgGet(11100, 1963, "The Business Unit does not allow Lead Day overrides"));
+      Return - 1;
+   End-If;
+   
+   /* Error if lead days are not entered and Override Lead days is selected  */
+   If &a_s_use_lead_days = "2" Then
+      If None(&a_i_leaddays) Then
+         Error MsgGet(11100, 1836, "If you choose to Override the Lead Days, you must enter Lead Days");
+         Return - 2;
+      End-If;
+   End-If;
+   
+   /* Error if you have chosen to use the business unit lead days, or ignore lead days altogether, but then entered a lead days value. */
+   If &a_s_use_lead_days = "1" Or
+         &a_s_use_lead_days = "3" Then
+      If All(&a_i_leaddays) Then
+         Error MsgGet(11100, 1964, "You cannot enter a lead days value with this Use Lead Days Option");
+         Return - 3;
+      End-If;
+   End-If;
+   
+   /* Error if lead days is greater than Max Lead days  */
+   If &a_i_leaddays > &a_i_maxleaddays Then
+      Error MsgGet(11100, 1837, "Lead Days cannot be greater than Max Lead Days", &a_i_maxleaddays);
+      Return - 4;
+   End-If;
+   
+   /* Warning if date range includes more days in the future than the Lead days, either from the setup page or entered by overriding the lead days on this page   */
+   If All(&a_d_from_date, &a_d_to_date) Then
+      Local integer &l_i_num_days;
+      &l_i_num_days = Abs(Days(%Date) - Days(&a_d_to_date));
+      If &a_s_override_flg = "N" Or
+            &a_s_use_lead_days <> "2" Then
+         If &l_i_num_days > &a_i_alocdays Then
+            MessageBox(0, "", 11100, 1838, "You have chosen a date range > lead days", &a_i_alocdays);
+         End-If;
+      Else
+         If &l_i_num_days > &a_i_leaddays Then
+            MessageBox(0, "", 11100, 1893, "You have chosen a date range > lead days", &a_i_leaddays);
+         End-If;
+      End-If;
+   End-If;
+   Return 1;
+end-method;
+
+method RetrieveDemandDynamic
+   /+ &a_rset_dmnd as Rowset, +/
+   /+ &a_s_resultset as String, +/
+   /+ &a_s_sql as String +/
+   /+ Returns Integer +/
+   
+   %This.CheckOrderRequestDay();
+   /* Inventory Bu sql */
+   Local string &l_s_bu_sql = " AND A.BUSINESS_UNIT ='" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "' ";
+   
+   /* fulfil state criteria*/
+   Local string &l_s_fulfil_state_sql = " AND A." | &i_o_demandstatesql.NO_RETRIEVAL_SQL;
+   Local string &l_s_unfulfill_sql, &l_s_releasable_sql, &l_s_wolines_sql;
+   If IN_SW_SEL_3_WRK.SELECT_UNFULFILLED = "Y" Then
+      &l_s_unfulfill_sql = " (A." | &i_o_demandstatesql.UNFULFILLED_SQL;
+      /* pre and post reserve flags are applicable only for unfulfilled demand only */
+      If None(IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV) Then
+         IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV = "0";
+      End-If;
+      Evaluate IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV
+      When = "1" /*post reservation */
+         &l_s_unfulfill_sql = &l_s_unfulfill_sql | " AND A.RESERVE_STATUS  >='12' ";
+         Break;
+      When = "2" /* pre reservation */
+         &l_s_unfulfill_sql = &l_s_unfulfill_sql | " AND A.RESERVE_STATUS  <'12' ";
+         Break;
+      When = "0"
+         Break;
+      End-Evaluate;
+      &l_s_unfulfill_sql = &l_s_unfulfill_sql | ") ";
+   End-If;
+   &l_s_unfulfill_sql = LTrim(RTrim(&l_s_unfulfill_sql));
+   
+   If IN_SW_SEL_3_WRK.SELECT_RELEASABLE = "Y" Then
+      &l_s_releasable_sql = " A." | &i_o_demandstatesql.RELEASABLE_SQL;
+   End-If;
+   &l_s_releasable_sql = LTrim(RTrim(&l_s_releasable_sql));
+   
+   <* 9.0 *>
+   If IN_SW_SEL_3_WRK.SELECT_WOLINES = "Y" Then
+      &l_s_wolines_sql = " (A." | &i_o_demandstatesql.PENDING_SQL | " AND A.DEMAND_SOURCE='WM' AND A.QTY_REQUESTED_BASE > A.QTY_SHIP_BASE AND A.PICK_BATCH_ID=0 AND A1.SOFT_ALLOC_FLG ='Y' ) ";
+      Evaluate IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV
+      When = "1" /*post reservation */
+         &l_s_wolines_sql = &l_s_wolines_sql | " AND A.RESERVE_STATUS  >='12' ";
+         Break;
+      When = "2" /* pre reservation */
+         &l_s_wolines_sql = &l_s_wolines_sql | " AND A.RESERVE_STATUS  <'12' ";
+         Break;
+      When = "0"
+         Break;
+      End-Evaluate;
+   End-If;
+   &l_s_wolines_sql = LTrim(RTrim(&l_s_wolines_sql));
+   
+   If &l_s_unfulfill_sql <> "" And
+         &l_s_releasable_sql <> "" And
+         &l_s_wolines_sql <> "" Then
+      &l_s_fulfil_state_sql = " AND (" | &l_s_unfulfill_sql | " OR " | &l_s_releasable_sql | " OR " | &l_s_wolines_sql | " ) ";
+   Else
+      If &l_s_unfulfill_sql <> "" And
+            &l_s_releasable_sql <> "" Then
+         &l_s_fulfil_state_sql = " AND (" | &l_s_unfulfill_sql | " OR " | &l_s_releasable_sql | " ) ";
+      Else
+         If &l_s_unfulfill_sql <> "" And
+               &l_s_wolines_sql <> "" Then
+            &l_s_fulfil_state_sql = " AND (" | &l_s_unfulfill_sql | " OR " | &l_s_wolines_sql | " ) ";
+         Else
+            If &l_s_wolines_sql <> "" And
+                  &l_s_releasable_sql <> "" Then
+               &l_s_fulfil_state_sql = " AND (" | &l_s_wolines_sql | " OR " | &l_s_releasable_sql | " ) ";
+            Else
+               If &l_s_releasable_sql <> "" Then
+                  &l_s_fulfil_state_sql = " AND " | &l_s_releasable_sql;
+               End-If;
+               If &l_s_unfulfill_sql <> "" Then
+                  &l_s_fulfil_state_sql = " AND " | &l_s_unfulfill_sql;
+               End-If;
+               If &l_s_wolines_sql <> "" Then
+                  &l_s_fulfil_state_sql = " AND " | &l_s_wolines_sql;
+               End-If;
+            End-If;
+         End-If;
+      End-If;
+   End-If;
+   
+   Local string &l_s_backorder_sql, &l_s_prereserve_sql, &l_s_fulfilledln_sql, &l_s_pegged_sql;
+   If (IN_SW_SEL_3_WRK.IN_SW_INCL_BCKORD = "Y") Then
+      &l_s_backorder_sql = " AND A.DEMAND_LINE_NO = 1 ";
+   Else
+      &l_s_backorder_sql = " ";
+   End-If;
+   
+   If (IN_SW_SEL_3_WRK.IN_SW_DIS_RSRV = "N") Then
+      &l_s_fulfilledln_sql = "  ";
+   Else /* 9.0 ADDED QTY SHIPPED BASED FRO ALM */
+      &l_s_fulfilledln_sql = " AND ((A1.SOFT_ALLOC_FLG = 'Y' AND (A.QTY_REQUESTED_BASE -A.QTY_BACKORDER_BASE-A.QTY_ALLOC_BASE-A.QTY_PROMISED_BASE - A.QTY_SHIP_BASE> 0)) OR  (A1.SOFT_ALLOC_FLG = 'N' AND (A.QTY_REQUESTED_BASE -A.QTY_BACKORDER_BASE - A.QTY_PICK_OVRIDE - A.QTY_SHIP_BASE > 0))) ";
+   End-If;
+   
+   If (IN_SW_SEL_3_WRK.IN_SW_PEGGED_LINES = "Y") Then
+      &l_s_pegged_sql = "  ";
+      &l_s_pegged_sql = " AND ((A1.SOFT_ALLOC_FLG = 'Y' AND A.PEG_STATUS IN ('30','40')) OR (A1.SOFT_ALLOC_FLG = 'N')) ";
+   Else
+      &l_s_pegged_sql = " "; /*" AND ((A1.SOFT_ALLOC_FLG = 'Y' AND A.PEGGED_FLG = 'N') OR (A1.SOFT_ALLOC_FLG = 'N')) ";*/
+   End-If;
+   
+   Local string &l_s_approved_sql;
+   Evaluate IN_SW_SEL_3_WRK.IN_SW_APPROVE
+   When = "0" /* None */
+      &l_s_approved_sql = "  ";
+      Break;
+   When = "1" /* Unapproved stock request*/
+      &l_s_approved_sql = " AND A.APPROVED_FLAG = 'N' AND A.DEMAND_LINE_NO = 1 ";
+      Break;
+   When = "2" /* Unapproved backorders*/
+      &l_s_approved_sql = " AND A.APPROVED_FLAG = 'N' AND A.DEMAND_LINE_NO > 1 ";
+      Break;
+   When = "3" /* Unapproved partial qty*/
+      &l_s_approved_sql = " AND A.FULFILL_FLAG= 'N' ";
+      Break;
+   When = "4" /* All Unapproved */
+      &l_s_approved_sql = " AND ((A.APPROVED_FLAG = 'N' AND A.DEMAND_LINE_NO = 1 ) OR ( A.APPROVED_FLAG = 'N' AND A.DEMAND_LINE_NO > 1 )  OR (A.FULFILL_FLAG= 'N' ))";
+      Break;
+   When-Other /* None */
+      &l_s_approved_sql = "  ";
+      Break;
+   End-Evaluate;
+   
+   
+   /* Order request based date range */
+   Local string &l_s_order_request_where = %This.GetOrderRequestWhereClause();
+   
+   /* user entered criteria */
+   Local string &l_s_criteria_sql = &i_o_SelectionTemplate.GetWhereClauseSubset(&i_as_unfulfil);
+   &i_o_INUtilities.PrefixSuffixIfNonNull(&l_s_criteria_sql, " AND ( ", " ) ");
+   
+   /* Item Subselect sql from the search criteria*/
+   Local string &l_s_item_sql = " AND ( A.INV_ITEM_ID <> ' ' AND A.INV_ITEM_ID IN (  SELECT B.INV_ITEM_ID FROM PS_MASTER_ITEM_TBL B WHERE  B.SETID ='" | &i_s_setid_item | "' ";
+   
+   rem Local string &l_s_cat_sql = %This.GetSubSelectSQL("CATEGORY_ID", " AND B.CATEGORY_ID='");
+   
+   Local string &l_s_cat_sql, &l_s_cat_cd;
+   &l_s_cat_cd = &i_o_SelectionTemplate.GetValue("CATEGORY_CD");
+   If &l_s_cat_cd <> "" And
+         &l_s_cat_cd <> " " Then
+      &l_s_cat_sql = " AND B.CATEGORY_ID IN (SELECT B1.CATEGORY_ID FROM PS_ITM_CAT_TBL B1 WHERE  B1.SETID ='" | &i_s_setid_item | "' AND B1.CATEGORY_CD ='" | &l_s_cat_cd | "') ";
+   Else
+      &l_s_cat_sql = "";
+   End-If;
+   Local string &l_s_itmgrp_sql = %This.GetSubSelectSQL("INV_ITEM_GROUP", " AND B.INV_ITEM_GROUP='");
+   Local string &l_s_family_sql = %This.GetSubSelectSQL("INV_PROD_FAM_CD", " AND B.INV_PROD_FAM_CD='");
+   If ((&l_s_cat_sql <> "" And
+         &l_s_cat_sql <> " ") Or
+         (&l_s_itmgrp_sql <> "" And
+            &l_s_itmgrp_sql <> " ") Or
+         (&l_s_family_sql <> "" And
+            &l_s_family_sql <> " ")) Then
+      &l_s_item_sql = &l_s_item_sql | &l_s_cat_sql | &l_s_itmgrp_sql | &l_s_family_sql | ")) ";
+   Else
+      &l_s_item_sql = " ";
+   End-If;
+   
+   /* Wave Code sql from the search criteria*/
+   Local string &l_s_routegrp_sql = " AND  ( ROUTE_CD <> ' ' AND ROUTE_CD IN ( SELECT CC.ROUTE_CD FROM PS_WAVE_ROUTE_INV CC WHERE BUSINESS_UNIT = CC.BUSINESS_UNIT AND ROUTE_CD = CC.ROUTE_CD ";
+   Local string &l_s_wavecode = %This.GetSubSelectSQL("WAVE_CD", " AND CC.WAVE_CD = '");
+   If &l_s_wavecode <> "" And
+         &l_s_wavecode <> " " Then
+      &l_s_routegrp_sql = &l_s_routegrp_sql | &l_s_wavecode | ")) ";
+   Else
+      &l_s_routegrp_sql = " ";
+   End-If;
+   
+   /* OM Subselect sql from the search criteria*/
+   Local string &l_s_om_sql = " AND (A.ORDER_NO <> ' ' AND A.ORDER_NO IN (SELECT ORDER_NO FROM PS_ORD_HEADER WHERE 1 = 1 ";
+   Local string &l_s_SOLD_TO_CUST_ID_sql = %This.GetSubSelectSQL("SOLD_TO_CUST_ID", " AND SOLD_TO_CUST_ID='");
+   Local string &l_s_ADDRESS_SEQ_SOLD_sql = %This.GetSubSelectSQL("ADDRESS_SEQ_SOLD", " AND ADDRESS_SEQ_SOLD='");
+   Local string &l_s_BILL_TO_CUST_ID_sql = %This.GetSubSelectSQL("BILL_TO_CUST_ID", " AND BILL_TO_CUST_ID='");
+   Local string &l_s_ORDER_TYPE_CD_sql = %This.GetSubSelectSQL("ORDER_TYPE_CD", " AND ORDER_TYPE_CD='");
+   Local string &l_s_ORDER_GRP_sql = %This.GetSubSelectSQL("ORDER_GRP", " AND ORDER_GRP='");
+   If ((&l_s_SOLD_TO_CUST_ID_sql <> "" And
+         &l_s_SOLD_TO_CUST_ID_sql <> " ") Or
+         (&l_s_ADDRESS_SEQ_SOLD_sql <> "" And
+            &l_s_ADDRESS_SEQ_SOLD_sql <> " ") Or
+         (&l_s_BILL_TO_CUST_ID_sql <> "" And
+            &l_s_BILL_TO_CUST_ID_sql <> " ") Or
+         (&l_s_ORDER_TYPE_CD_sql <> "" And
+            &l_s_ORDER_TYPE_CD_sql <> " ") Or
+         (&l_s_ORDER_GRP_sql <> "" And
+            &l_s_ORDER_GRP_sql <> " ")) Then
+      &l_s_om_sql = &l_s_om_sql | &l_s_SOLD_TO_CUST_ID_sql | &l_s_ADDRESS_SEQ_SOLD_sql | &l_s_BILL_TO_CUST_ID_sql | &l_s_ORDER_TYPE_CD_sql | &l_s_ORDER_GRP_sql | " )) ";
+   Else
+      &l_s_om_sql = " ";
+   End-If;
+   Local string &l_s_shortage_sql = " ";
+   Local string &l_s_shortage_sql2 = " ";
+   If IN_SW_SEL_3_WRK.IN_SW_DISP_SHORT = "Y" Then
+      &l_s_shortage_sql = " AND A.INV_ITEM_ID IN  (SELECT A2.INV_ITEM_ID FROM PS_IN_SW_ITMSH2_VW A2, PS_BU_ITEMS_INV B2 WHERE A2.BUSINESS_UNIT = A1.BUSINESS_UNIT AND A2.INV_ITEM_ID = A1.INV_ITEM_ID AND A2.BUSINESS_UNIT=B2.BUSINESS_UNIT AND A2.INV_ITEM_ID=B2.INV_ITEM_ID AND A2.QTY_AVAILABLE > B2.QTY_AVAILABLE) ";
+      &l_s_shortage_sql2 = " AND EXISTS (SELECT 'X' FROM PS_IN_SW_ITMSH2_VW A2, PS_BU_ITEMS_INV B2 WHERE A2.BUSINESS_UNIT = A.BUSINESS_UNIT AND A2.INV_ITEM_ID = A.INV_ITEM_ID AND A2.BUSINESS_UNIT=B2.BUSINESS_UNIT AND A2.INV_ITEM_ID=B2.INV_ITEM_ID  AND A2.QTY_AVAILABLE > B2.QTY_AVAILABLE) ";
+      
+   End-If;
+   
+   <*9.0 *>
+   /* ALM Subselect sql from the search criteria*/
+   Local string &l_s_alm_sql;
+   If IN_SW_SEL_3_WRK.SELECT_WOLINES = "Y" Then
+      &l_s_alm_sql = " AND (A.ORDER_NO <> ' ' AND A.DEMAND_SOURCE = 'WM' AND A.ORDER_NO IN (SELECT A.WO_ID FROM PS_WM_WO_HDR A,PS_BUS_UNIT_TBL_WM B WHERE 1 = 1 AND A.BUSINESS_UNIT = B.BUSINESS_UNIT AND B.BUSINESS_UNIT_IN = '" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "' ";
+      
+      Local string &l_s_WO_TYPE_sql = %This.GetSubSelectSQL("WO_TYPE", " AND A.WO_TYPE='");
+      Local string &l_s_SHOP_ID_sql = %This.GetSubSelectSQL("SHOP_ID", " AND A.SHOP_ID='");
+      If ((&l_s_WO_TYPE_sql <> "" And
+            &l_s_WO_TYPE_sql <> " ") Or
+            (&l_s_SHOP_ID_sql <> "" And
+               &l_s_SHOP_ID_sql <> " ")) Then
+         &l_s_alm_sql = &l_s_alm_sql | &l_s_WO_TYPE_sql | &l_s_SHOP_ID_sql | " )) ";
+      Else
+         &l_s_alm_sql = " ";
+      End-If;
+   End-If;
+   
+   <* START:USE lead days sql *>
+   Local string &l_s_useleaddays_clause, &l_s_use_lead_days, &l_s_temp;
+   Local integer &l_i_leaddays;
+   &l_s_use_lead_days = &i_o_SelectionTemplate.GetValue("USE_LEAD_DAYS");
+   If &l_s_use_lead_days <> "0" And
+         &l_s_use_lead_days <> " " And
+         &l_s_use_lead_days <> "" And
+         (&l_s_use_lead_days = "1" Or
+            &l_s_use_lead_days = "2" Or
+            &l_s_use_lead_days = "3") Then
+      &l_s_temp = &i_o_SelectionTemplate.GetValue("LEAD_DAYS");
+      If All(&l_s_temp) And
+            IsNumber(&l_s_temp) Then
+         &l_i_leaddays = Value(&l_s_temp);
+      End-If;
+      Local string &l_s_clause1, &l_s_clause2, &l_s_clause1_atp, &l_s_clause2_atp;
+      &i_o_sw_misc.ReturnUseLeadDaysClause(IN_SW_SEL_1_WRK.BUSINESS_UNIT, &l_s_use_lead_days, &l_i_leaddays, &l_s_clause1, &l_s_clause2, &l_s_clause1_atp, &l_s_clause2_atp);
+      Local boolean &l_b_append;
+      If &l_s_clause1 <> " AND 1=0 " And
+            &l_s_clause1 <> "" Then
+         &l_s_useleaddays_clause = "(" | &l_s_clause1 | ")";
+         &l_b_append = True;
+      End-If;
+      If &l_s_clause2 <> " AND 1=0 " And
+            &l_s_clause2 <> "" Then
+         If &l_b_append Then
+            &l_s_useleaddays_clause = &l_s_useleaddays_clause | " OR ";
+         End-If;
+         &l_s_useleaddays_clause = &l_s_useleaddays_clause | "(" | &l_s_clause2 | ")";
+         &l_b_append = True;
+      End-If;
+      If &l_s_useleaddays_clause <> "" And
+            &l_s_useleaddays_clause <> " " Then
+         &l_s_useleaddays_clause = " (" | &l_s_useleaddays_clause | " ) ";
+      End-If;
+      
+      <* for atp item tag the master item table to exedcute the atp clause for atp items only *>
+      Local string &l_s_atp_item_sql = " AND ( A.INV_ITEM_ID <> ' ' AND A.INV_ITEM_ID IN (  SELECT ZBB.INV_ITEM_ID FROM PS_MASTER_ITEM_TBL ZBB WHERE  ZBB.SETID ='" | &i_s_setid_item | "' AND ZBB.PROMISE_OPTION= '2' ))";
+      Local string &l_s_useleaddays_atp_clause;
+      &l_b_append = False;
+      If &l_s_clause1_atp <> " AND 1=0 " And
+            &l_s_clause1_atp <> "" Then
+         &l_s_useleaddays_atp_clause = "(" | &l_s_clause1_atp | ")";
+         &l_b_append = True;
+      End-If;
+      
+      If &l_s_clause2_atp <> " AND 1=0 " And
+            &l_s_clause2_atp <> "" Then
+         If &l_b_append Then
+            &l_s_useleaddays_atp_clause = &l_s_useleaddays_atp_clause | " OR ";
+         End-If;
+         &l_s_useleaddays_atp_clause = &l_s_useleaddays_atp_clause | "(" | &l_s_clause2_atp | ")";
+      End-If;
+      
+      If &l_s_useleaddays_atp_clause <> "" And
+            &l_s_useleaddays_atp_clause <> " " Then
+         &l_s_useleaddays_atp_clause = " ((" | &l_s_useleaddays_atp_clause | ") " | &l_s_atp_item_sql | ") ";
+      End-If;
+      
+      If &l_s_useleaddays_clause <> "" And
+            &l_s_useleaddays_clause <> " " Then
+         If &l_s_useleaddays_atp_clause <> "" And
+               &l_s_useleaddays_atp_clause <> " " Then
+            &l_s_useleaddays_clause = " AND (" | &l_s_useleaddays_clause | " OR " | &l_s_useleaddays_atp_clause | ") ";
+         Else
+            &l_s_useleaddays_clause = " AND " | &l_s_useleaddays_clause;
+         End-If;
+      Else
+         If &l_s_useleaddays_atp_clause <> "" And
+               &l_s_useleaddays_atp_clause <> " " Then
+            &l_s_useleaddays_clause = " AND " | &l_s_useleaddays_atp_clause;
+         Else
+            &l_s_useleaddays_clause = " ";
+         End-If;
+      End-If;
+   End-If;
+   <* END: Use lead days sql *>
+   
+   Local string &l_s_dynamicwhere;
+   Local string &l_s_dynamicwhere1;
+   Local string &l_s_dynamicwhere2;
+   
+   &l_s_dynamicwhere = &l_s_bu_sql | &l_s_fulfil_state_sql | &l_s_criteria_sql | &l_s_backorder_sql | &l_s_prereserve_sql | &l_s_fulfilledln_sql | &l_s_pegged_sql | &l_s_approved_sql;
+   &l_s_dynamicwhere1 = &l_s_dynamicwhere | &l_s_order_request_where | &l_s_item_sql | &l_s_routegrp_sql | &l_s_om_sql | &l_s_shortage_sql | &l_s_alm_sql | &l_s_useleaddays_clause;
+   &l_s_dynamicwhere2 = &l_s_dynamicwhere | &l_s_order_request_where | &l_s_item_sql | &l_s_routegrp_sql | &l_s_om_sql | &l_s_shortage_sql2 | &l_s_alm_sql | &l_s_useleaddays_clause;
+   
+   
+   Local string &l_s_tablelist1 = " FROM PS_IN_DEMAND A,PS_DF_SETUP_IT_INV A1 ";
+   Local string &l_s_staticwhere1 = " WHERE A.BUSINESS_UNIT = A1.BUSINESS_UNIT AND A.INV_ITEM_ID = A1.INV_ITEM_ID ";
+   Local string &l_s_tablelist2 = " FROM PS_IN_DEMAND A,PS_DF_SETUP_INV  A1 ";
+   Local string &l_s_staticwhere2 = " WHERE A.BUSINESS_UNIT = A1.BUSINESS_UNIT AND (NOT EXISTS(SELECT 'X' FROM PS_DF_SETUP_IT_INV DSII1 WHERE DSII1.BUSINESS_UNIT = A.BUSINESS_UNIT AND DSII1.INV_ITEM_ID = A.INV_ITEM_ID)) ";
+   Local string &l_s_record_sql = "               WHERE BUSINESS_UNIT = '" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "' AND DEMAND_SOURCE = 'DS' AND SOURCE_BUS_UNIT = 'SBU01' AND ORDER_NO = '123' AND ORDER_INT_LINE_NO = 1 AND SCHED_LINE_NBR = 1 AND INV_ITEM_ID = '101' AND 2=1  UNION " | &a_s_resultset | &l_s_tablelist1 | &l_s_staticwhere1 | &l_s_dynamicwhere1 | &a_s_sql | " UNION " | &a_s_resultset | &l_s_tablelist2 | &l_s_staticwhere2 | &l_s_dynamicwhere2 | &a_s_sql;
+   
+   If &a_rset_dmnd.Name <> "" Then
+      Return &a_rset_dmnd.Select(@("Record." | &a_rset_dmnd.DBRecordName), &l_s_record_sql);
+   Else
+      
+      Return &a_rset_dmnd.FillAppend(&l_s_record_sql);
+   End-If;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+*  Displays Order from 4 demand tables based on the states selected
+* @param  None
+* @return none
+*
+*/
+method RefreshOrders
+   /+ &a_s_sql as String +/
+   /+ Returns Boolean +/
+   
+   Local string &l_s_reqfieldmissing;
+   If Not &i_o_SelectionTemplate.CheckRequiredField(&l_s_reqfieldmissing) Then
+      MessageBox(0, "", 11100, 1969, "Template Definition does not exist.", &l_s_reqfieldmissing);
+      Return False;
+   End-If;
+   %This.CheckOrderRequestDay();
+   Local Rowset &l_rset_ordp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW);
+   &l_rset_ordp.Flush();
+   GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW).Flush(); /* Demand Lines */
+   Local string &l_s_resultset;
+   Local boolean &l_b_itemlist;
+   Local integer &l_i_retcode;
+   Evaluate IN_SW_SEL_3_WRK.IN_SW_SHWITEM
+   When = "N" /* Order list */
+      &l_b_itemlist = False;
+      &l_s_resultset = "SELECT DISTINCT A.BUSINESS_UNIT, A.DEMAND_SOURCE, A.SOURCE_BUS_UNIT, A.ORDER_NO,0,0,' ',' ',' ' ,' ',0,'N' "; /* ,A1.SOFT_ALLOC_FLG*/
+      &l_rset_ordp.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_ordp, &l_s_resultset, &a_s_sql);
+      &l_rset_ordp.Sort(IN_SW_ORDP_1_VW.DEMAND_SOURCE, "A", IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT, "A", IN_SW_ORDP_1_VW.ORDER_NO, "A");
+      IN_SW_SEL_3_WRK.IN_SW_COLLAPSE_ALL.Visible = False;
+      IN_SW_SEL_3_WRK.IN_SW_EXPAND_ALL.Visible = False;
+      Break;
+   When = "Y" /* item list */
+      &l_b_itemlist = True;
+      &l_s_resultset = "SELECT DISTINCT A.BUSINESS_UNIT, ' ', ' ', ' ',0,0,A.INV_ITEM_ID ,' ',' ',' ',0,'Y'"; /* ,A1.SOFT_ALLOC_FLG*/
+      &l_rset_ordp.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_ordp, &l_s_resultset, &a_s_sql);
+      &l_rset_ordp.Sort(IN_SW_ORDP_1_VW.INV_ITEM_ID, "A");
+      IN_SW_SEL_3_WRK.IN_SW_COLLAPSE_ALL.Visible = False;
+      IN_SW_SEL_3_WRK.IN_SW_EXPAND_ALL.Visible = False;
+      Break;
+   When = "K" /* Kit summary list */
+      &l_b_itemlist = True;
+      &l_s_resultset = "SELECT DISTINCT A.BUSINESS_UNIT, ' ', A.SOURCE_BUS_UNIT, ' ',0,0,' ',A.PARENT_PROD_ID,' ',' ',0,'K'"; /* ,A1.SOFT_ALLOC_FLG*/
+      &l_rset_ordp.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_ordp, &l_s_resultset, " AND A.PARENT_PROD_ID<>' '  " | &a_s_sql);
+      &l_rset_ordp.Sort(IN_SW_ORDP_1_VW.PARENT_PROD_ID, "A");
+      IN_SW_SEL_3_WRK.IN_SW_COLLAPSE_ALL.Visible = True;
+      IN_SW_SEL_3_WRK.IN_SW_EXPAND_ALL.Visible = True;
+      Break;
+   When = "D" /* Kit Detail */
+      &l_b_itemlist = True;
+      &l_s_resultset = "SELECT DISTINCT A.BUSINESS_UNIT, A.DEMAND_SOURCE, A.SOURCE_BUS_UNIT, ORDER_NO,ORDER_INT_LINE_NO,SCHED_LINE_NBR,' ',A.PARENT_PROD_ID,' ',' ',DP_KIT_PARENT_QTY,'D'"; /* ,A1.SOFT_ALLOC_FLG*/
+      &l_rset_ordp.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_ordp, &l_s_resultset, " AND A.PARENT_PROD_ID<>' ' " | &a_s_sql);
+      &l_rset_ordp.Sort(IN_SW_ORDP_1_VW.PARENT_PROD_ID, "A");
+      IN_SW_SEL_3_WRK.IN_SW_COLLAPSE_ALL.Visible = False;
+      IN_SW_SEL_3_WRK.IN_SW_EXPAND_ALL.Visible = False;
+      Break;
+   End-Evaluate;
+   Return %This.FormatOrderSummary( True);
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+*  Displays Order from 4 demand tables based on the states selected
+* @param  None
+* @return none
+*
+*/
+method GotoOrder
+   
+   If %This.RefreshOrders(" ") Then
+      IN_SW_SEL_3_WRK.DESCRLONG = &i_o_SelectionTemplate.GetCriteriaString();
+      Page.IN_SW_ORDERPOOL.Visible = True;
+      TransferPage(Page.IN_SW_ORDERPOOL);
+   Else
+      /*ADD Message that no rows match this search conditions */
+      MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria.");
+   End-If;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* Appends sql for the current state
+*/
+method BuildSQLforOrderRetrieval
+   /+ &a_as_subset as Array2 of String, +/
+   /+ &a_s_fromstate as String, +/
+   /+ &a_s_state_constant as String, +/
+   /+ &a_s_where as String +/
+   /+ Returns String +/
+   
+   Local string &l_s_sql, &l_s_criteriasql;
+   
+   If &a_s_fromstate = "Y" Then
+      &l_s_criteriasql = &i_o_SelectionTemplate.GetWhereClauseSubset(&a_as_subset);
+      &l_s_sql = " ( " | &a_s_state_constant | &a_s_where;
+      
+      If (IN_SW_SEL_3_WRK.IN_SW_INCL_BCKORD = "N") Then
+         &l_s_sql = &l_s_sql | " DEMAND_LINE_NO = 1 ";
+      End-If;
+      If (IN_SW_SEL_3_WRK.IN_SW_INCL_PRERRV = "N") Then
+         &l_s_sql = &l_s_sql | " QTY_ALLOC_BASE   > 0 ";
+      End-If;
+      
+      If &l_s_criteriasql <> "" And
+            &l_s_criteriasql <> " " Then
+         &l_s_sql = &l_s_sql | " AND " | &l_s_criteriasql;
+      End-If;
+      &l_s_sql = &l_s_sql | " ) ";
+   End-If;
+   Return &l_s_sql;
+end-method;
+
+<**** SSR 890 Function OK ***>
+<*** 890 Level 1 ***>
+/**
+*     Display Demand Lines from three different areas
+*     1. From an Order
+*     2. Directly from Selection page
+*     3. From a shipping container
+   * @param  1 &a_s_mode :  1. From an Order,2. from Selection page, 3 From shipping container
+   * @param  2 &a_row_order: packed or unpacked row
+   * @param  3 &a_s_where_clause: where clause to restrict demand lines
+* @return none
+*
+*/
+method GotoDemandLines
+   /+ &a_s_mode as String, +/
+   /+ &a_row_order as Row, +/
+   /+ &a_s_where_clause as String +/
+   rem =================================================================================;
+   rem Date      Initials  Issue #    Description                                       ;
+   rem 08022007  LG        1673308000 Included field BCKORDER_FLAG in whereclause      ;
+   rem =================================================================================;
+   
+   
+   Local integer &l_i_retcode;
+   Local Rowset &l_rset_dmndlines = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW);
+   %This.CheckOrderRequestDay();
+   /* Order request based date range */
+   Local string &l_s_order_request_where = %This.GetOrderRequestWhereClause();
+   Local string &l_s_resultset = "SELECT A.BUSINESS_UNIT ,A.DEMAND_SOURCE ,A.SOURCE_BUS_UNIT ,A.ORDER_NO ,A.ORDER_INT_LINE_NO ,A.SCHED_LINE_NBR ,A.INV_ITEM_ID ,A.DEMAND_LINE_NO ";
+   &l_s_resultset = &l_s_resultset | ",A.IN_FULFILL_STATE ,A.PRIORITY_NBR ,'EA' ,A.QTY_REQUESTED_BASE ,A.QTY_ALLOC_BASE ,A.QTY_BACKORDER_BASE ,A.QTY_PROMISED_BASE ,0 ,A.QTY_PICK_OVR_BASE ,A.UNIT_OF_MEASURE ,A.QTY_REQUESTED ,A.QTY_ALLOCATED ,A.QTY_BACKORDER ,0 ,A.QTY_PICK_OVRIDE ,A.SHIP_ID ,A.CARRIER_ID ,A.SHIP_TYPE_ID ,A.ROUTE_CD ,A.LOAD_ID ,A.LOCATION ,A.DESTIN_BU ,A.CUST_ID ,A.CUST_NAME ,A.SHIP_TO_CUST_ID ,A.ADDRESS_SEQ_NUM ,A.VMI_DESTIN_SHIPTO ,A.PICK_BATCH_ID ,A.PICKLIST_LINE_NO ,A.TMS_EXT_REF_ID ,A.TMS_EXT_REF_LN_NBR ,A.EXT_REF_NBR ,A.EXT_REF_LN_NBR ,A.INTERUNIT_FLG ,A1.SOFT_ALLOC_FLG ,%datetimeout(A.SCHED_DTTM),A.HARD_ALLOC_FLAG,A.LOT_ALLOC_FLG,A.RESERVE_STATUS,A.IN_LINE_BO_RULE,A.FULFILL_FLAG,A.APPROVED_FLAG,A.BACKORDER_CREATED,A.LAST_MAINT_OPRID,%datetimeout(A.DT_TIMESTAMP),A.SHIP_ID_EST,A.PARENT_PROD_ID,A.PRODUCT_ID,0,A.PEG_STATUS,%datetimeout(A.RESERVED_DTTM),A.IN_LINE_RESV_RULE,A.IN_LN_RESV_BO_RULE,A.IN_ORDER_RESV_RULE,A.OPTIONAL_SHIP,0,0,A.PARTIAL_QTY_FLAG,A.IN_PRIOR_STATE ,A.IN_ZERO_PICKED_FLG,";
+   &l_s_resultset = &l_s_resultset | " A.QTY_SHIP_BASE,A.QTY_SHIPPED,' ',' ',A.CONFIG_CODE, A.QTY_PACK_BASE,A.BCKORDER_FLAG, A.DELIVERY_ID ";
+   If &p_bFlushDemandLines Then
+      &l_rset_dmndlines.Flush();
+   End-If;
+   Evaluate &a_s_mode
+   When = "1" /* from order List information */
+      Local array of string &l_as_fldlist = CreateArray("BUSINESS_UNIT", "DEMAND_SOURCE", "SOURCE_BUS_UNIT", "ORDER_NO");
+      Local string &l_s_sql = " AND A.DEMAND_SOURCE='" | &a_row_order.IN_SW_ORDP_1_VW.DEMAND_SOURCE.Value | "' " | " AND A.SOURCE_BUS_UNIT='" | &a_row_order.IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value | "' " | " AND A.ORDER_NO='" | &a_row_order.IN_SW_ORDP_1_VW.ORDER_NO.Value | "' ";
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &l_s_sql);
+      &i_s_order_sql = &l_s_sql;
+      Break;
+   When = "2" /* from WOrkbench selection page */
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, " ");
+      Break;
+   When = "3" /* Refresh from demand lines pages*/
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &i_s_order_sql);
+      Break;
+      
+   When = "4" /* from kit summary List information */
+      Local string &l_s_sql1 = " AND A.PARENT_PROD_ID='" | &a_row_order.IN_SW_ORDP_1_VW.PARENT_PROD_ID.Value | "' AND A.SOURCE_BUS_UNIT='" | &a_row_order.IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value | "' ";
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &l_s_sql1);
+      &i_s_order_sql = &l_s_sql1;
+      Break;
+   When = "5" /* from kit detail List information */
+      Local string &l_s_sql2 = " AND A.DEMAND_SOURCE='" | &a_row_order.IN_SW_ORDP_1_VW.DEMAND_SOURCE.Value | "' " | " AND A.SOURCE_BUS_UNIT='" | &a_row_order.IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value | "' AND A.ORDER_NO='" | &a_row_order.IN_SW_ORDP_1_VW.ORDER_NO.Value | "' AND A.ORDER_INT_LINE_NO=" | &a_row_order.IN_SW_ORDP_1_VW.ORDER_INT_LINE_NO.Value | " AND A.SCHED_LINE_NBR =" | &a_row_order.IN_SW_ORDP_1_VW.SCHED_LINE_NBR.Value | " AND A.PARENT_PROD_ID='" | &a_row_order.IN_SW_ORDP_1_VW.PARENT_PROD_ID.Value | "' ";
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &l_s_sql2);
+      &i_s_order_sql = &l_s_sql2;
+      Break;
+   End-Evaluate;
+   
+   &l_rset_dmndlines.Sort(IN_SW_ORDP_2_VW.BUSINESS_UNIT, "A", IN_SW_ORDP_2_VW.DEMAND_SOURCE, "A", IN_SW_ORDP_2_VW.SOURCE_BUS_UNIT, "A", IN_SW_ORDP_2_VW.ORDER_NO, "A", IN_SW_ORDP_2_VW.ORDER_INT_LINE_NO, "A", IN_SW_ORDP_2_VW.SCHED_LINE_NBR, "A", IN_SW_ORDP_2_VW.INV_ITEM_ID, "A", IN_SW_ORDP_2_VW.DEMAND_LINE_NO, "A");
+   Local integer &i, &l_i_rowcount;
+   Local Field &l_fld_temp;
+   Local string &l_s_lineaction;
+   Local array of string &l_as_validlineactions;
+   
+   
+   If &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_dmndlines, "IN_SW_ORDP_2_VW", "DEMAND_SOURCE") Then
+      %This.SetDemandLinesQty(&l_rset_dmndlines);
+      &l_i_rowcount = &l_rset_dmndlines.ActiveRowCount;
+      For &i = 1 To &l_i_rowcount
+         &l_fld_temp = &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.IN_SW_LINE_ACTION;
+         &l_s_lineaction = %This.ControlPeggingDDLB(&l_rset_dmndlines(&i));
+         &l_as_validlineactions = Split(&l_s_lineaction, ",");
+         &i_o_INUtilities.AddDropDownItemFromArray(&l_fld_temp, &l_as_validlineactions, &i_as_lineactionxlats, True);
+         
+         
+         &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.INV_ITEM_ID.Label = &l_rset_dmndlines(&i).IN_SW_ORDP_2_VW.INV_ITEM_ID.Value;
+         <*9.0:begin*>
+         If All(&l_rset_dmndlines(&i).IN_SW_ORDP_2_VW.PARENT_PROD_ID.Value) Then /* And None(&l_rset_dmndlines(&i).IN_SW_ORDP_2_VW.CONFIG_CODE.Value) Then */
+            &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.PARENT_PROD_ID.Label = &l_rset_dmndlines(&i).IN_SW_ORDP_2_VW.PARENT_PROD_ID.Value;
+         Else
+            &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.PARENT_PROD_ID.Visible = False;
+         End-If
+         <*9.0:end*>
+      End-For;
+      If &p_bShowDemandLinesPage And
+            %Page <> "IN_SW_DEMANDLINES" Then
+         Page.IN_SW_DEMANDLINES.Visible = True;
+         TransferPage(Page.IN_SW_DEMANDLINES);
+      End-If;
+   Else
+      /*ADD Message that no rows match this search conditions */
+      MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria");
+   End-If;
+end-method;
+
+<*** 890 Level 1 ***>
+/**
+*     Display Demand Lines from three different areas
+*     1. From an Order
+*     2. Directly from Selection page
+*     3. From a shipping container
+   * @param  1 &a_s_mode :  1. From an Order,2. from Selection page, 3 From shipping container
+   * @param  2 &a_row_order: packed or unpacked row
+   * @param  3 &a_s_where_clause: where clause to restrict demand lines
+* @return none
+*
+*/
+method GotoItemView
+   /+ &a_s_mode as String, +/
+   /+ &a_row_order as Row, +/
+   /+ &a_s_where_clause as String +/
+   rem =================================================================================;
+   rem Date      Initials  Issue #    Description                                       ;
+   rem 08022007  LG        1673308000 Included field BCKORDER_FLAG in whereclause      ;
+   rem =================================================================================;
+   
+   
+   %This.CheckOrderRequestDay();
+   Local integer &l_i_retcode;
+   Local Rowset &l_rset_dmndlines = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW);
+   Local Rowset &l_rset_buiteminv = GetLevel0()(1).GetRowset(Scroll.IN_SW_BUITEM_VW);
+   /* Order request based date range */
+   Local string &l_s_order_request_where = %This.GetOrderRequestWhereClause();
+   Local string &l_s_resultset = "SELECT A.BUSINESS_UNIT ,A.DEMAND_SOURCE ,A.SOURCE_BUS_UNIT ,A.ORDER_NO ,A.ORDER_INT_LINE_NO ,A.SCHED_LINE_NBR ,A.INV_ITEM_ID ,A.DEMAND_LINE_NO ";
+   &l_s_resultset = &l_s_resultset | ",A.IN_FULFILL_STATE ,A.PRIORITY_NBR ,'EA',A.QTY_REQUESTED_BASE ,A.QTY_ALLOC_BASE ,A.QTY_BACKORDER_BASE ,A.QTY_PROMISED_BASE ,0 ,A.QTY_PICK_OVR_BASE ,A.UNIT_OF_MEASURE ,A.QTY_REQUESTED ,A.QTY_ALLOCATED ,A.QTY_BACKORDER ,0 ,A.QTY_PICK_OVRIDE ,A.SHIP_ID ,A.CARRIER_ID ,A.SHIP_TYPE_ID ,A.ROUTE_CD ,A.LOAD_ID ,A.LOCATION ,A.DESTIN_BU ,A.CUST_ID ,A.CUST_NAME ,A.SHIP_TO_CUST_ID ,A.ADDRESS_SEQ_NUM ,A.VMI_DESTIN_SHIPTO ,A.PICK_BATCH_ID ,A.PICKLIST_LINE_NO ,A.TMS_EXT_REF_ID ,A.TMS_EXT_REF_LN_NBR ,A.EXT_REF_NBR ,A.EXT_REF_LN_NBR ,A.INTERUNIT_FLG ,A1.SOFT_ALLOC_FLG ,%datetimeout(A.SCHED_DTTM) ,A.HARD_ALLOC_FLAG,A.LOT_ALLOC_FLG,A.RESERVE_STATUS,A.IN_LINE_BO_RULE,A.FULFILL_FLAG,A.APPROVED_FLAG,A.BACKORDER_CREATED,A.LAST_MAINT_OPRID,%datetimeout(A.DT_TIMESTAMP),A.SHIP_ID_EST,A.PARENT_PROD_ID,A.PRODUCT_ID,0,A.PEG_STATUS,%datetimeout(A.RESERVED_DTTM),A.IN_LINE_RESV_RULE,A.IN_LN_RESV_BO_RULE,A.IN_ORDER_RESV_RULE,A.OPTIONAL_SHIP,0,0 ,A.PARTIAL_QTY_FLAG,A.IN_PRIOR_STATE,A.IN_ZERO_PICKED_FLG";
+   &l_s_resultset = &l_s_resultset | ",A.QTY_SHIP_BASE,A.QTY_SHIPPED,' ',' ' ,A.CONFIG_CODE, A.QTY_PACK_BASE,A.BCKORDER_FLAG, A.DELIVERY_ID ";
+   
+   Local string &l_s_sql;
+   Local array of string &l_as_fldlist;
+   Evaluate &a_s_mode
+   When = "1" /* from demand lines information */
+      &l_as_fldlist = CreateArray("BUSINESS_UNIT", "DEMAND_SOURCE", "SOURCE_BUS_UNIT", "ORDER_NO");
+      &l_s_sql = " AND A.INV_ITEM_ID ='" | &a_row_order.IN_SW_ORDP_2_VW.INV_ITEM_ID.Value | "' ";
+      &l_rset_dmndlines.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &l_s_sql);
+      
+      &l_s_sql = " WHERE BUSINESS_UNIT ='" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "'  AND INV_ITEM_ID ='" | &a_row_order.IN_SW_ORDP_2_VW.INV_ITEM_ID.Value | "' ";
+      &l_rset_buiteminv.Flush();
+      &l_rset_buiteminv.Select(Record.IN_SW_BUITEM_VW, &l_s_sql);
+      Break;
+   When = "2" /* from WOrkbench selection page */
+      /* need to retrieve but items inv */
+      &l_rset_dmndlines.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, " ");
+      
+      Local string &l_s_itemid = &i_o_SelectionTemplate.GetValue("INV_ITEM_ID");
+      &l_s_sql = " WHERE BUSINESS_UNIT ='" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "'  AND INV_ITEM_ID ='" | &l_s_itemid | "' ";
+      &l_rset_buiteminv.Flush();
+      &l_rset_buiteminv.Select(Record.IN_SW_BUITEM_VW, &l_s_sql);
+      Break;
+   When = "3" /* Refresh from Item View page*/
+      &l_s_sql = " AND A.INV_ITEM_ID ='" | &l_rset_buiteminv(1).IN_SW_BUITEM_VW.INV_ITEM_ID.Value | "' ";
+      &l_rset_dmndlines.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &l_s_sql);
+      
+      &l_s_sql = " WHERE BUSINESS_UNIT ='" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "'  AND INV_ITEM_ID ='" | &l_rset_buiteminv(1).IN_SW_BUITEM_VW.INV_ITEM_ID.Value | "' ";
+      &l_rset_buiteminv.Flush();
+      &l_rset_buiteminv.Select(Record.IN_SW_BUITEM_VW, &l_s_sql);
+      Break;
+   When = "4" /* from Order summary page*/
+      &l_as_fldlist = CreateArray("BUSINESS_UNIT", "DEMAND_SOURCE", "SOURCE_BUS_UNIT", "ORDER_NO");
+      &l_s_sql = " AND A.INV_ITEM_ID ='" | &a_row_order.IN_SW_ORDP_1_VW.INV_ITEM_ID.Value | "' ";
+      &l_rset_dmndlines.Flush();
+      &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_dmndlines, &l_s_resultset, &l_s_sql);
+      
+      &l_s_sql = " WHERE BUSINESS_UNIT ='" | IN_SW_SEL_1_WRK.BUSINESS_UNIT | "'  AND INV_ITEM_ID ='" | &a_row_order.IN_SW_ORDP_1_VW.INV_ITEM_ID.Value | "' ";
+      &l_rset_buiteminv.Flush();
+      &l_rset_buiteminv.Select(Record.IN_SW_BUITEM_VW, &l_s_sql);
+      Break;
+      
+   End-Evaluate;
+   
+   If &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_dmndlines, "IN_SW_ORDP_4_VW", "DEMAND_SOURCE") Then
+      %This.SetDemandLinesQty(&l_rset_dmndlines);
+      Local integer &i, &l_i_rowcount;
+      Local number &l_n_opendmdqty;
+      Local string &l_s_lineaction;
+      Local array of string &l_as_validlineactions;
+      Local Field &l_fld_temp;
+      &l_i_rowcount = &l_rset_dmndlines.ActiveRowCount;
+      For &i = 1 To &l_i_rowcount
+         &l_n_opendmdqty = &l_n_opendmdqty + &l_rset_dmndlines(&i).IN_SW_ORDP_4_VW.QTY_OPEN_STD.Value;
+         &l_fld_temp = &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.IN_SW_LINE_ACTION;
+         &l_s_lineaction = %This.ControlPeggingDDLB(&l_rset_dmndlines(&i));
+         &l_as_validlineactions = Split(&l_s_lineaction, ",");
+         &i_o_INUtilities.AddDropDownItemFromArray(&l_fld_temp, &l_as_validlineactions, &i_as_lineactionxlats, True);
+         <*9.0:begin*>
+         If All(&l_rset_dmndlines(&i).IN_SW_ORDP_4_VW.PARENT_PROD_ID.Value) Then /* And None(&l_rset_dmndlines(&i).IN_SW_ORDP_4_VW.CONFIG_CODE.Value) Then */
+            &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.PARENT_PROD_ID.Label = &l_rset_dmndlines(&i).IN_SW_ORDP_4_VW.PARENT_PROD_ID.Value;
+         Else
+            &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.PARENT_PROD_ID.Visible = False;
+         End-If
+         <*9.0:end*>
+      End-For;
+      &l_rset_buiteminv(1).IN_SW_SEL_3_WRK.QTY_OPEN_STD.Value = &l_n_opendmdqty;
+      
+      /* sort based on final sort Copie from INV_REALLOC_WRK.SEARCH_BTN 8.8 */
+      %This.AssignPriorityRankingRowset(&l_rset_dmndlines, "IN_SW_SEL_3_WRK", "PRIORITY_RANK");
+      Evaluate &i_s_final_sort
+      When = "D" /* by schedule date */
+         &l_rset_dmndlines.Sort(IN_SW_SEL_3_WRK.PRIORITY_RANK, "A", IN_SW_ORDP_4_VW.SCHED_DTTM, "A", IN_SW_ORDP_4_VW.PRIORITY_NBR, "A", IN_SW_ORDP_4_VW.ORDER_NO, "A", IN_SW_ORDP_4_VW.ORDER_INT_LINE_NO, "A", IN_SW_ORDP_4_VW.SCHED_LINE_NBR, "A");
+         Break;
+      When = "O" /* by Order Number */
+         &l_rset_dmndlines.Sort(IN_SW_SEL_3_WRK.PRIORITY_RANK, "A", IN_SW_ORDP_4_VW.ORDER_NO, "A", IN_SW_ORDP_4_VW.SCHED_DTTM, "A", IN_SW_ORDP_4_VW.ORDER_INT_LINE_NO, "A", IN_SW_ORDP_4_VW.SCHED_LINE_NBR, "A");
+         Break;
+      When = "P" /* by priority */
+         &l_rset_dmndlines.Sort(IN_SW_SEL_3_WRK.PRIORITY_RANK, "A", IN_SW_ORDP_4_VW.PRIORITY_NBR, "A", IN_SW_ORDP_4_VW.SCHED_DTTM, "A", IN_SW_ORDP_4_VW.ORDER_NO, "A", IN_SW_ORDP_4_VW.ORDER_INT_LINE_NO, "A", IN_SW_ORDP_4_VW.SCHED_LINE_NBR, "A");
+         Break;
+      End-Evaluate;
+      
+      If %Page <> "IN_SW_ITEMVIEW" Then
+         Local string &l_s_softalloc_flg;;
+         SQLExec("select SOFT_ALLOC_FLG FROM PS_DF_SETUP_IT_INV where BUSINESS_UNIT = :1 AND INV_ITEM_ID=:2", &i_rset_lvl0(1).IN_SW_SEL_1_WRK.BUSINESS_UNIT.Value, &l_rset_buiteminv(1).IN_SW_BUITEM_VW.INV_ITEM_ID.Value, &l_s_softalloc_flg);
+         If &l_s_softalloc_flg = "" Or
+               &l_s_softalloc_flg = " " Then
+            &l_s_softalloc_flg = &i_s_softalloc_flg;
+         End-If;
+         If &l_s_softalloc_flg = "Y" Then
+            IN_SW_SEL_4_WRK.IN_SW_PRORATE_GRP.Visible = True;
+         Else
+            IN_SW_SEL_4_WRK.IN_SW_PRORATE_GRP.Visible = False;
+         End-If;
+         
+         
+         
+         Page.IN_SW_ITEMVIEW.Visible = True;
+         TransferPage(Page.IN_SW_ITEMVIEW);
+      End-If;
+   Else
+      /*ADD Message that no rows match this search conditions */
+      MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria");
+   End-If;
+end-method;
+
+
+<**** SSR 890 Function OK ***>
+/**
+* Tansfers to the selection pages
+   * @param  1 &a_s_currentpage: Page where the hyperlink is clicked
+   * @param  2 &a_fld_gotoaction: hyperlink field
+* @return none
+*
+*/
+method GotoSelection
+   /+ &a_s_currentpage as String, +/
+   /+ &a_fld_gotoaction as Field +/
+   &a_s_currentpage = "PAGE." | &a_s_currentpage;
+   GetPage(@(&a_s_currentpage)).Visible = False;
+   Page.IN_SW_SELECTION.Visible = True;
+   TransferPage(Page.IN_SW_SELECTION);
+end-method;
+
+
+<**** SSR 890 Function OK ***>
+/**
+* Transfer to the request cart if the cart is not empty
+   * @param  1 &a_s_currentpage: Page where the hyperlink is clicked
+   * @param  2 &a_fld_gotoaction: hyperlink field
+* @return none
+*
+*/
+method gotocart
+   /+ &a_s_currentpage as String, +/
+   /+ &a_fld_gotoaction as Field +/
+   Local Rowset &l_rset_cart;
+   &l_rset_cart = %This.ShopCart;
+   If &l_rset_cart.ActiveRowCount > 0 Then
+      &a_s_currentpage = "PAGE." | &a_s_currentpage;
+      GetPage(@(&a_s_currentpage)).Visible = False;
+      Page.IN_SW_CART.Visible = True;
+      TransferPage(Page.IN_SW_CART);
+   Else
+      /* display message that cart is empty */
+      MessageBox(0, "", 11100, 1951, "Message not found.");
+   End-If;
+end-method;
+
+<**** SSR 890 Function OK ***>
+<*** 890 Level 1 ***>
+/**
+* Function that populates the demand rowsets based on entered criteria or selected rows.
+*
+ * @param  1 &a_rset_demandRowset : Rowset to retrieve rows into
+   * @param  2 &a_s_demand_field :  Select state
+   * @param  3 &a_s_demand_record : Table to select from
+   * @param  4 &a_s_demand_record_where : Static where clause
+   * @param  5 &a_rset_controlRowset : Rowset that contains fields specific to this table
+   * @param  6 &a_as_controlArray : List of field specific to this table on the template
+   * @param  7 &a_i_startrowInteger : Starting rownumber of this retrieval (would be ending row + 1)
+   * @param  8 &a_s_state : CUrrent state
+   * @param  9 &a_b_execute_where: If where clause to be appended from user entered selection condition
+   * @param  10 &a_b_eval_state: If sate ahave to be checked prior to retrieval
+   * @param  11 &a_s_exclude : Value to be set for the exclude flag
+   * @return number of rows retrieved, 0 otherwise
+*
+*/
+method RetrieveOrders
+   /+ &a_rset_demand as Rowset, +/
+   /+ &a_s_demand_field as String, +/
+   /+ &a_s_demand_record as String, +/
+   /+ &a_s_demand_record_where as String, +/
+   /+ &a_as_control as Array2 of String, +/
+   /+ &a_i_startrow as Integer, +/
+   /+ &a_s_state as String, +/
+   /+ &a_b_execute_where as Boolean, +/
+   /+ &a_b_eval_state as Boolean, +/
+   /+ &a_s_exclude as String +/
+   /+ Returns Integer +/
+   
+   /* Get allowed demand Status */
+   Local string &l_s_demand_flg, &l_s_temp, &l_s_temp1;
+   If &a_b_eval_state Then
+      &l_s_demand_flg = &i_o_SelectionTemplate.GetValue(&a_s_demand_field);
+      If &l_s_demand_flg = "" Or
+            &l_s_demand_flg = " " Then
+         &l_s_demand_flg = "N";
+      End-If;
+   Else
+      &l_s_demand_flg = "Y";
+   End-If;
+   
+   Local integer &i, &l_i_retcode, &l_i_retcode1, &l_i_endrow;
+   If &l_s_demand_flg = "Y" Then
+      &a_s_demand_record = "RECORD." | &a_s_demand_record;
+      
+      If &a_b_execute_where Then
+         &l_s_temp = &i_o_SelectionTemplate.GetWhereClauseSubset(&a_as_control);
+         If &l_s_temp <> "" And
+               &l_s_temp <> " " Then
+            &l_s_temp = " AND " | &l_s_temp;
+         End-If;
+      End-If;
+      &l_s_temp1 = &a_s_demand_record_where | &l_s_temp;
+      &l_i_retcode = &a_rset_demand.Select(@&a_s_demand_record, &l_s_temp1);
+      
+      &l_i_endrow = &a_rset_demand.ActiveRowCount;
+      If &l_i_retcode > 0 Then
+         If &a_i_startrow < 1 Then
+            &a_i_startrow = 1;
+         End-If;
+         
+         For &i = &a_i_startrow To &l_i_endrow
+            rem&a_rset_demand(&i).IN_SW_SEL_3_WRK.IN_SW_CURR_STATE.Value = &a_s_state;
+            &a_rset_demand(&i).IN_SW_SEL_3_WRK.EXCLUDE.Value = &a_s_exclude;
+            &a_rset_demand(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "N";
+         End-For;
+      End-If;
+      Return &l_i_retcode;
+   End-If;
+   Return 0;
+end-method;
+
+
+/**
+* Applies mass change function: select all, select none, exclude all and exclude none
+   * @param  1 &a_s_page : Page where the hyperlink was clicked
+   * @param  2 &a_fld_gotoaction: Clicked field
+* @return none
+*
+*/
+method SelectAllProcessingHyperlink
+   /+ &a_s_page as String, +/
+   /+ &a_fld_gotoaction as Field +/
+   Local string &l_s_selectall;
+   Local integer &i, &l_i_rowcount;
+   Evaluate &a_fld_gotoaction.Name
+   When = "IN_FW_SEL_ALL" /* select all */
+      &l_s_selectall = "Y";
+      Break;
+   When = "IN_FW_SEL_NONE" /* Select None*/
+      &l_s_selectall = "N";
+      Break;
+   End-Evaluate;
+   Local Rowset &l_rset_temp;
+   Local boolean &l_b_execute;
+   Evaluate &a_s_page
+   When = "IN_SW_ORDERPOOL"
+      &l_rset_temp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW);
+      If IN_SW_SEL_3_WRK.IN_SW_SHWITEM <> "K" Then
+         &l_b_execute = True;
+      Else /* need to select only 'K' rows and unselect 'D' rows */
+         &l_i_rowcount = &l_rset_temp.ActiveRowCount;
+         For &i = 1 To &l_i_rowcount
+            If &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB1.Enabled Then
+               If &l_rset_temp(&i).IN_SW_ORDP_1_VW.IN_SW_SHWITEM.Value = "K" And
+                     &l_s_selectall = "Y" Then
+                  &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB1.Value = "Y";
+                  &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "Y";
+               Else
+                  &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB1.Value = "N";
+                  &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "N";
+               End-If;
+            End-If;
+         End-For;
+      End-If;
+      Break;
+   When = "IN_SW_DEMANDLINES"
+      &l_rset_temp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW);
+      &l_b_execute = True;
+      Break;
+   When = "IN_SW_ITEMVIEW"
+      &l_rset_temp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW);
+      &l_b_execute = True;
+      Break;
+   When = "IN_SW_CART"
+      &l_rset_temp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_3_VW);
+      &l_b_execute = True;
+      Break;
+   End-Evaluate;
+   If &l_b_execute Then
+      &l_i_rowcount = &l_rset_temp.ActiveRowCount;
+      For &i = 1 To &l_i_rowcount
+         If &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Enabled Then
+            &l_rset_temp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = &l_s_selectall;
+         End-If;
+      End-For;
+   End-If;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* After demand rows are added to the cart, prevent, the user from re-selecting them again without a retrieval
+   * @param  1 &a_rset_tempRowset: Rowset that had rows added to the cart
+* @return none
+*
+*/
+method PostAddToCartProcessing
+   /+ &a_rset_temp as Rowset +/
+   Local integer &i, &l_i_rowcount;
+   Local Record &l_rec_temp;
+   &l_i_rowcount = &a_rset_temp.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      &l_rec_temp = &a_rset_temp(&i).IN_SW_SEL_3_WRK;
+      If &l_rec_temp.SELECT_CB.Value = "Y" Then
+         &l_rec_temp.SELECT_CB.Enabled = False;
+         &l_rec_temp.EXCLUDE.Enabled = False;
+      End-If;
+   End-For;
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+* Given sql statement, this functions set the dynamic view's prompt table's sql.
+   * @param  1 &a_s_fldname : Fieldname with the prompt (like order no, order int line noe etc)
+   * @param  2 &a_s_sql : prompt's sql statement
+   * @param  3 &a_b_atleastone: if true, set prompt sql else set it to blank
+* @return none
+*
+*/
+method SetDemandKeyDynamicPromptUtlility1
+   /+ &a_s_fldname as String, +/
+   /+ &a_s_sql as String, +/
+   /+ &a_b_atleastone as Boolean +/
+   Local integer &l_i_retcode, &l_i_row, &l_i_dis_rowno, &l_i_column;
+   Local string &l_s_fldname, &l_s_fldname_to;
+   Local Record &l_rec_temp_fld_store, &l_rec_temp_fld;
+   
+   &l_i_retcode = &i_o_SelectionTemplate.ReturnFieldMatchStoreDisplay(&a_s_fldname, &l_i_row, &l_i_dis_rowno, &l_i_column, &l_s_fldname, &l_s_fldname_to, &l_rec_temp_fld_store, &l_rec_temp_fld);
+   If &l_i_retcode > 0 Then
+      If &a_b_atleastone Then
+         &l_rec_temp_fld.GetField(@&l_s_fldname).SqlText = &a_s_sql;
+         If &l_s_fldname_to <> "" And
+               &l_s_fldname_to <> " " Then
+            &l_rec_temp_fld.GetField(@&l_s_fldname_to).SqlText = &a_s_sql;
+         End-If;
+      Else
+         &l_rec_temp_fld.GetField(@&l_s_fldname).SqlText = "";
+         If &l_s_fldname_to <> "" And
+               &l_s_fldname_to <> " " Then
+            &l_rec_temp_fld.GetField(@&l_s_fldname_to).SqlText = "";
+         End-If;
+      End-If;
+   End-If;
+end-method;
+
+
+<**** SSR 890 Function OK ***>
+/**
+  * Adds Drop down list entries if the field is a dropdown list box
+  * Uses the correct translate value based on language
+  *
+  * @param 1 &a_fld_temp: Field that has to be populate (FROM_CHAR_DDLB or TO_CHAR_DDLB)
+  * @param 2 &a_s_fldname: ACtual name of the field used to retrieve data from translate value table
+  * @param 3 &a_as_validfldvalues: Arrya of string storing allowable field values
+  * @return None
+  */
+method AddDropDownItem
+   /+ &a_fld_temp as Field, +/
+   /+ &a_s_fldname as String, +/
+   /+ &a_as_validfldvalues as Array of String, +/
+   /+ &a_b_longdescr as Boolean +/
+   
+   &a_fld_temp.ClearDropDownList();
+   Local SQL &l_sql_xlat;
+   Local Record &l_rec_xlat;
+   Local string &l_s_effsql;
+   /* CN#IN910 - Use A_ED.EFF_STATUS instead of A.EFF_STATUS. */
+   &l_s_effsql = "  WHERE A.EFFDT=( SELECT MAX(EFFDT) FROM PSXLATITEM A_ED WHERE A_ED.FIELDNAME=A.FIELDNAME AND A_ED.FIELDVALUE=A.FIELDVALUE AND A_ED.EFFDT<=%CurrentDateIn AND A_ED.EFF_STATUS = 'A') AND ";
+   If %Language <> %Language_Base Then
+      /* Get XLAT from the related language table first */
+      &l_rec_xlat = CreateRecord(Record.PSXLATITEMLANG);
+      &l_sql_xlat = CreateSQL("%SELECTALL(:1) A " | &l_s_effsql | " FIELDNAME=:2 AND LANGUAGE_CD=:3 ORDER BY FIELDVALUE");
+      &l_sql_xlat.Execute(&l_rec_xlat, &a_s_fldname, %Language);
+   Else
+      &l_rec_xlat = CreateRecord(Record.PSXLATITEM);
+      &l_sql_xlat = CreateSQL("%SELECTALL(:1) A " | &l_s_effsql | " FIELDNAME=:2 ORDER BY FIELDVALUE");
+      &l_sql_xlat.Execute(&l_rec_xlat, &a_s_fldname);
+   End-If;
+   Local string &l_s_code, &l_s_fldname, &l_s_descr;
+   If &a_b_longdescr Then
+      &l_s_fldname = "FIELD.XLATLONGNAME";
+   Else
+      &l_s_fldname = "FIELD.XLATSHORTNAME";
+   End-If;
+   
+   While &l_sql_xlat.Fetch(&l_rec_xlat)
+      &l_s_code = &l_rec_xlat.FIELDVALUE.Value;
+      &l_s_descr = &l_rec_xlat.GetField(@&l_s_fldname).Value;
+      If &a_as_validfldvalues.Find(&l_s_code) > 0 Then
+         &a_fld_temp.AddDropDownItem(&l_s_code, &l_s_descr);
+      End-If;
+   End-While;
+   &l_sql_xlat.Close();
+end-method;
+
+
+<*** 890 Level 1 ***>
+/**
+* utility function that returns the number of rows for a single table
+   * @param  1 &a_s_demand_field : Select-releasable,reserved, confirmed field
+   * @param  2 &a_s_demand_record : Table to check against
+   * @param  3 &a_s_demand_record_where : Static where clause for the t
+   * @param  4 &a_rset_control: Rowset to filter selection fields
+   * @param  5 &a_as_control: Array of string of fields specific to this table
+   * @param  6 &a_b_eval_state: IF demand field should be evaluate or not (false for reservation)
+   * @return count of rows 0 otherwise
+*
+*/
+method GetDemandCount
+   /+ &a_s_demand_field as String, +/
+   /+ &a_s_demand_record as String, +/
+   /+ &a_s_demand_record_where as String, +/
+   /+ &a_as_control as Array2 of String, +/
+   /+ &a_b_eval_state as Boolean +/
+   /+ Returns Integer +/
+   
+   /* Get allowed demand Status */
+   Local string &l_s_demand_flg, &l_s_temp, &l_s_temp1;
+   If &a_b_eval_state Then
+      &l_s_demand_flg = &i_o_SelectionTemplate.GetCheckBoxValue(&a_s_demand_field);
+   Else
+      &l_s_demand_flg = "Y";
+   End-If;
+   Local integer &i, &l_i_retcode, &l_i_retcode1, &l_i_endrow;
+   If &l_s_demand_flg = "Y" Then
+      &a_s_demand_record = "PS_" | &a_s_demand_record;
+      &l_s_temp = &i_o_SelectionTemplate.GetWhereClauseSubset(&a_as_control);
+      If &l_s_temp <> "" And
+            &l_s_temp <> " " Then
+         &l_s_temp = " AND " | &l_s_temp;
+      End-If;
+      &l_s_temp1 = "select count(*) from " | &a_s_demand_record | &a_s_demand_record_where | &l_s_temp;
+      SQLExec(&l_s_temp1, &l_i_retcode);
+      Return &l_i_retcode;
+   End-If;
+   Return 0;
+end-method;
+
+<**** SSR 890 Function OK ***>
+<*** 890 Level 1 ***>
+/**
+* this function is called bu the add to cart function from the selection page. Computes the number of rows that match the entered condition and displays an error message if the count is 0
+* @param  None
+* @return none
+*
+*/
+method SelectionDemandCount
+   Local integer &l_i_retcode1, &l_i_retcode, &l_i_dmndcount;
+   Local string &l_s_where;
+   Local string &l_s_routegrp_sql = %This.GetRouteGroupSQL();
+   Local string &l_s_temp;
+   &l_i_retcode = %This.RetrieveAllStatesUnPacked(GetLevel0(), &l_s_where, "IN_DEMAND", False);
+   If All(&l_s_where) Then
+      SQLExec("select count(*) from PS_IN_DEMAND" | &l_s_temp | &l_s_where, &l_i_retcode);
+   End-If;
+   
+   If (&l_i_retcode) < 1 Then
+      Error MsgGet(11100, 1948, "No demand Lines exist matching the entered selection criteria.");
+      Return;
+   End-If;
+   
+   
+   If &l_i_dmndcount < 1 Then
+      Error MsgGet(11100, 1948, "No demand Lines exist matching the entered selection criteria.");
+      Return;
+   End-If;
+   
+end-method;
+
+
+<**** SSR 890 Function OK ***>
+/**
+* Given the order request and the date_from field at the group level, this function generates a where clause for the date range condition
+* @param  None
+* @return Where clause as a string, blank if no clause
+*
+*/
+method GetOrderRequestWhereClause
+   /+ Returns String +/
+   Local string &l_s_order_request, &l_s_order_request_where, &l_s_temp1, &l_s_temp2;
+   &l_s_order_request = &i_o_SelectionTemplate.GetValue("ORDER_REQUEST");
+   If All(&l_s_order_request) Then
+      Local date &l_d_from, &l_d_to;
+      Local time &l_t_from, &l_t_to;
+      
+      &l_s_order_request_where = " ";
+      &l_d_from = &i_o_SelectionTemplate.GetValue("DATE_FROM");
+      &l_d_to = &i_o_SelectionTemplate.GetValueTo("DATE_FROM");
+      &l_t_from = &i_o_SelectionTemplate.GetValue("TIME_FROM");
+      &l_t_to = &i_o_SelectionTemplate.GetValueTo("TIME_FROM");
+      Evaluate &l_s_order_request
+      When = "1"
+         &l_s_temp1 = &i_o_INUtilities.GetWhereClauseOneRowWithOperators("%datepart(SCHED_DTTM)", &l_d_from, &l_d_to, " %datein('", "')", ">=", "<=", "BETWEEN", "AND", " ");
+         &l_s_temp2 = &i_o_INUtilities.GetWhereClauseOneRowWithOperators("%timepart(SCHED_DTTM)", &l_t_from, &l_t_to, " %timein('", "')", ">=", "<=", "BETWEEN", "AND", " ");
+         If &l_s_temp1 <> "" And
+               &l_s_temp1 <> " " Then
+            &l_s_order_request_where = &l_s_temp1;
+         End-If;
+         If &l_s_temp2 <> "" And
+               &l_s_temp2 <> " " Then
+            If &l_s_order_request_where <> "" And
+                  &l_s_order_request_where <> " " Then
+               &l_s_order_request_where = &l_s_order_request_where | " AND " | &l_s_temp2;
+            Else
+               &l_s_order_request_where = &l_s_temp2;
+            End-If
+         End-If;
+         
+         Break;
+      When = "2"
+         &l_s_order_request_where = &i_o_INUtilities.GetWhereClauseOneRowWithOperators("DEMAND_DATE", &l_d_from, &l_d_to, " %datein('", "')", ">=", "<=", "BETWEEN", "AND", " ");
+         Break;
+      When = "3"
+         &l_s_temp1 = &i_o_INUtilities.GetWhereClauseOneRowWithOperators("%datepart(SHIP_EARLY_DTTM)", &l_d_from, &l_d_to, " %datein('", "')", ">=", "<=", "BETWEEN", "AND", " ");
+         &l_s_temp2 = &i_o_INUtilities.GetWhereClauseOneRowWithOperators("%timepart(SHIP_EARLY_DTTM)", &l_t_from, &l_t_to, " %timein('", "')", ">=", "<=", "BETWEEN", "AND", " ");
+         If &l_s_temp1 <> "" And
+               &l_s_temp1 <> " " Then
+            &l_s_order_request_where = &l_s_temp1;
+         End-If;
+         If &l_s_temp2 <> "" And
+               &l_s_temp2 <> " " Then
+            If &l_s_order_request_where <> "" And
+                  &l_s_order_request_where <> " " Then
+               &l_s_order_request_where = &l_s_order_request_where | " AND " | &l_s_temp2;
+            Else
+               &l_s_order_request_where = &l_s_temp2;
+            End-If
+         End-If;
+         Break;
+      When = "4"
+         &l_d_from = %Date;
+         &l_s_order_request_where = &i_o_INUtilities.GetWhereClauseOneRow("DEMAND_DATE", "DATE", &l_d_from, &l_d_to);
+         Break;
+      When-Other
+         Break;
+      End-Evaluate;
+   End-If;
+   &i_o_INUtilities.PrefixIfNonNull(&l_s_order_request_where, " AND ");
+   Return &l_s_order_request_where;
+end-method;
+
+
+
+
+
+<**** SSR 890 Function OK ***>
+/**
+  * Called in page activate to hide/unhide page transfer hyperlink
+  *
+  * @param 1 &a_s_page: Page name from which this function is called
+  * @return None
+*
+  */
+method GotoHyperlinkControl
+   /+ &a_s_page as String +/
+   
+   Local Record &l_rec_temp;
+   &l_rec_temp = GetLevel0()(1).IN_SW_SEL_3_WRK;
+   
+   Local boolean &l_b_wrkbench, &l_b_orders, &l_b_dmndline, &l_b_itemview, &l_b_cart;
+   Evaluate &a_s_page
+   When = "IN_SW_SELECTION"
+      &l_b_orders = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW), "IN_SW_ORDP_1_VW", "DEMAND_SOURCE");
+      &l_b_dmndline = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE");
+      &l_b_itemview = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW), "IN_SW_ORDP_4_VW", "DEMAND_SOURCE");
+      &l_b_cart = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_3_VW), "IN_SW_ORDP_3_VW", "IN_SW_SOURCE_KEY");
+      Break;
+   When = "IN_SW_ORDERPOOL"
+      &l_b_wrkbench = True;
+      &l_b_cart = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_3_VW), "IN_SW_ORDP_3_VW", "IN_SW_SOURCE_KEY");
+      &l_b_dmndline = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE");
+      &l_b_itemview = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW), "IN_SW_ORDP_4_VW", "DEMAND_SOURCE");
+      Break;
+   When = "IN_SW_DEMANDLINES"
+      &l_b_wrkbench = True;
+      &l_b_cart = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_3_VW), "IN_SW_ORDP_3_VW", "IN_SW_SOURCE_KEY");
+      &l_b_orders = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW), "IN_SW_ORDP_1_VW", "DEMAND_SOURCE");
+      &l_b_itemview = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW), "IN_SW_ORDP_4_VW", "DEMAND_SOURCE");
+      Break;
+   When = "IN_SW_ITEMVIEW"
+      &l_b_wrkbench = True;
+      &l_b_cart = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_3_VW), "IN_SW_ORDP_3_VW", "IN_SW_SOURCE_KEY");
+      &l_b_orders = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW), "IN_SW_ORDP_1_VW", "DEMAND_SOURCE");
+      &l_b_dmndline = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE");
+      
+      Break;
+   When = "IN_SW_CART"
+      &l_b_wrkbench = True;
+      &l_b_orders = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW), "IN_SW_ORDP_1_VW", "DEMAND_SOURCE");
+      &l_b_dmndline = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE");
+      &l_b_itemview = %This.CheckifNewRows(GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW), "IN_SW_ORDP_4_VW", "DEMAND_SOURCE");
+      Break;
+   End-Evaluate;
+   &l_rec_temp.IN_SW_SRCH_CRIT.Visible = &l_b_wrkbench;
+   &l_rec_temp.IN_SW_PROCLOG_PAGE.Visible = &l_b_cart;
+   &l_rec_temp.IN_SW_SUMMARY_PAGE.Visible = &l_b_orders;
+   &l_rec_temp.IN_SW_DMDLINE_PAGE.Visible = &l_b_dmndline;
+   &l_rec_temp.IN_SW_ITMVIEW_PAGE.Visible = &l_b_itemview;
+   
+end-method;
+
+<**** SSR 890 Function OK ***>
+/**
+  * This function transfers to a different page based on the hyperlink clicked
+  *
+  * @param  1 &a_s_page: Page where this field is clicked
+  * @param  2 &a_s_mode: Field intended action (values in case stmt)
+ * @return none
+*
+*/
+method GotoProcessingHyperlink
+   /+ &a_s_page as String, +/
+   /+ &a_s_mode as String +/
+   Local string &l_s_temp, &l_s_temp1;
+   Local integer &l_i_retcode;
+   Local Record &l_rec_temp, &l_rec_bct;
+   Local Rowset &l_rset_lvl0;
+   &l_rset_lvl0 = %This.Lvl0Rowset;
+   
+   
+   Evaluate &a_s_mode
+   When = "1" /* go to order */
+      Evaluate &a_s_page
+      When = "IN_SW_SELECTION"
+         %This.GotoOrder();
+         Break;
+      When-Other
+         Local boolean &l_b_ordersexists;
+         &l_b_ordersexists = %This.CheckifNewRows(&l_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_1_VW), "IN_SW_ORDP_1_VW", "BUSINESS_UNIT");
+         If &l_b_ordersexists Then
+            Page.IN_SW_ORDERPOOL.Visible = True;
+            TransferPage(Page.IN_SW_ORDERPOOL);
+         Else
+            MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria.");
+         End-If;
+         Break;
+         
+      End-Evaluate;
+   When = "2" /* go to demand lines*/
+      Evaluate &a_s_page
+      When = "IN_SW_SELECTION"
+         %This.GotoDemandLines("2", GetLevel0()(1), " ");
+         Break;
+      When-Other /* = "IN_SW_DEMANDLOC" */
+         If &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_2_VW), "IN_SW_ORDP_2_VW", "DEMAND_SOURCE") Then
+            Page.IN_SW_DEMANDLINES.Visible = True;
+            TransferPage(Page.IN_SW_DEMANDLINES);
+         Else
+            /*ADD Message that no rows match this search conditions */
+            MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria");
+         End-If;
+         Break;
+      End-Evaluate;
+   When = "3" /* go to Item View*/
+      Evaluate &a_s_page
+      When = "IN_SW_SELECTION"
+         %This.GotoItemView("2", GetLevel0()(1), " ");
+         Break;
+      When-Other /* = "IN_SW_DEMANDLOC" */
+         If &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_lvl0(1).GetRowset(Scroll.IN_SW_ORDP_4_VW), "IN_SW_ORDP_4_VW", "DEMAND_SOURCE") Then
+            Page.IN_SW_DEMANDLINES.Visible = True;
+            TransferPage(Page.IN_SW_ITEMVIEW);
+         Else
+            /*ADD Message that no rows match this search conditions */
+            MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria");
+         End-If;
+         Break;
+      End-Evaluate;
+   When = "4" /* go to Process log*/
+      Local Rowset &l_rset_cart;
+      &l_rset_cart = %This.ShopCart;
+      If &l_rset_cart.ActiveRowCount > 0 Then
+         GetPage(@("PAGE." | &a_s_page)).Visible = False;
+         Page.IN_SW_CART.Visible = True;
+         TransferPage(Page.IN_SW_CART);
+      Else
+         /* display message that cart is empty */
+         MessageBox(0, "", 11100, 1951, "Message not found.");
+      End-If;
+      Break;
+      
+   When = "5" /* go to workbench*/
+      GetPage(@("PAGE." | &a_s_page)).Visible = False;
+      Page.IN_SW_SELECTION.Visible = True;
+      TransferPage(Page.IN_SW_SELECTION);
+      Break;
+      
+   End-Evaluate;
+end-method;
+
+/**
+* Build sub query for search data not based on IN_DEMAND
+* @param1  &a_s_fldname: fieldname on the search list
+* @param2  &a_s_subselect_sql: Subselect where clause with out the prefix AND
+* @return String of the sql statement, blank if route group is blank
+*
+*/
+method GetSubSelectSQL
+   /+ &a_s_fldname as String, +/
+   /+ &a_s_subselect_sql as String +/
+   /+ Returns String +/
+   Local string &l_s_fldvalue, &l_s_sql;
+   &l_s_fldvalue = &i_o_SelectionTemplate.GetValue(&a_s_fldname);
+   If &l_s_fldvalue <> "" And
+         &l_s_fldvalue <> " " Then
+      &l_s_sql = &a_s_subselect_sql | &l_s_fldvalue | "' ";
+   End-If;
+   Return &l_s_sql;
+end-method;
+
+
+
+
+<**** SSR 890 Function OK ***>
+/**
+* Build sub query for route group
+* @param  None
+* @return String of the sql statement, blank if route group is blank
+*
+*/
+method GetRouteGroupSQL
+   /+ Returns String +/
+   Local string &l_s_routegroup, &l_s_sql;
+   &l_s_routegroup = &i_o_SelectionTemplate.GetValue("WAVE_CD");
+   If &l_s_routegroup = "" Or
+         &l_s_routegroup = " " Then
+      &l_s_sql = " ";
+   Else
+      &l_s_sql = " AND ( ROUTE_CD <> ' ' AND ROUTE_CD IN ( SELECT CC.ROUTE_CD FROM PS_WAVE_ROUTE_INV CC " | " WHERE BUSINESS_UNIT = CC.BUSINESS_UNIT AND ROUTE_CD = CC.ROUTE_CD AND CC.WAVE_CD = '" | &l_s_routegroup | "' )) ";
+   End-If;
+   Return &l_s_sql;
+end-method;
+
+
+<**** SSR 890 Function OK ***>
+/**
+* Creates a 2d array for searching for fields that are valid by state,instead of searching a rowset
+* which is slow
+*/
+method Create2dCtrlArray
+   /+ &a_s_category as String, +/
+   /+ &a_s_subcategory as String, +/
+   /+ &a_s_whereclause as String +/
+   /+ Returns Array2 of String +/
+   
+   Local array of array of string &l_as_ctrlfields = CreateArrayRept(CreateArrayRept("", 0), 0);
+   Local SQL &l_SQL_ctrl = CreateSQL(" SELECT SORT_SEQ_NBR,FIELDNAME, IN_TM_WHER_FLDNAME  FROM PS_IN_FW_DEFF_1_VW  WHERE IN_TM_CODE= :1 AND IN_TM_CATEGORY =:2 AND IN_TM_SUB_CATEGORY = :3 ORDER BY SORT_SEQ_NBR", "SHORT_WRKBENCH", &a_s_category, &a_s_subcategory);
+   Local integer &l_i_lineno = 1;
+   Local integer &l_i_sortseq_nbr;
+   Local string &FIELDNAME, &IN_TM_WHER_FLDNAME;
+   While &l_SQL_ctrl.Fetch(&l_i_sortseq_nbr, &FIELDNAME, &IN_TM_WHER_FLDNAME)
+      &l_as_ctrlfields.Push(&FIELDNAME);
+      &l_as_ctrlfields [&l_i_lineno].Push(&IN_TM_WHER_FLDNAME);
+      &l_i_lineno = &l_i_lineno + 1;
+   End-While;
+   Return &l_as_ctrlfields;
+end-method;
+
+<**** SSR 890 Function OK ***>
+method RetrieveAllStatesUnPacked
+   /+ &a_rset_dmnd as Rowset, +/
+   /+ &a_s_sqlwhere as String out, +/
+   /+ &a_s_record as String, +/
+   /+ &a_b_retrieve as Boolean +/
+   /+ Returns Integer +/
+   Local integer &l_i_retcode;
+   Local array of string &l_as_stateclauses = CreateArrayRept("", 0);
+   &l_as_stateclauses [1] = %This.BuildSQLforOrderRetrieval(&i_as_unfulfil, IN_SW_SEL_3_WRK.SELECT_UNFULFILLED, &i_o_demandstatesql.UNFULFILLED_SQL, " ");
+   &l_as_stateclauses [2] = %This.BuildSQLforOrderRetrieval(&i_as_releasable, IN_SW_SEL_3_WRK.SELECT_RELEASABLE, &i_o_demandstatesql.RELEASABLE_SQL, " ");
+   Local string &l_s_temp = &i_o_INUtilities.JoinClausesIfNonNull(&l_as_stateclauses, " OR ");
+   &i_o_INUtilities.PrefixSuffixIfNonNull(&l_s_temp, " AND ( ", " ) ");
+   If All(&l_s_temp) Then
+      &a_s_sqlwhere = &a_s_sqlwhere | " " | &l_s_temp;
+      If &a_b_retrieve Then
+         &l_i_retcode = &a_rset_dmnd.Select(@("Record." | &a_s_record), &a_s_sqlwhere);
+      End-If;
+   End-If;
+   Return &l_i_retcode;
+end-method;
+
+
+
+<*** 890 Level 2 ***>
+/**
+* Set the qty to qty requested, qty allocated or qty pick confirmed based on the current state of the demand
+* @param  None
+* @return none
+*
+*/
+method SetDemandLinesQty
+   /+ &a_rset_dmndlines as Rowset +/
+   Local string &l_s_stduom;
+   Local integer &i, &l_i_rowcount, &l_i_retcode;
+   Local number &l_n_qtyalloc_base, &l_n_qtyalloc_order, &l_n_qty_to, &l_n_open_std, &l_n_open_Orderuom;
+   Local Record &l_rec_dmndline, &l_rec_dmndline_wrk;
+   Local boolean &l_b_bufferrowset;
+   Local string &l_s_WO_TYPE, &l_s_SHOP_ID, &l_s_descr;
+   If &a_rset_dmndlines.Name <> "" And
+         &a_rset_dmndlines.Name <> " " Then
+      &l_b_bufferrowset = True;
+   End-If;
+   Local boolean &l_b_invaliddmd;
+   &l_i_rowcount = &a_rset_dmndlines.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      &l_rec_dmndline = &a_rset_dmndlines(&i).GetRecord(@("RECORD." | &a_rset_dmndlines.DBRecordName));
+      &l_rec_dmndline_wrk = &a_rset_dmndlines(&i).IN_SW_SEL_3_WRK;
+      If &l_rec_dmndline.DEMAND_SOURCE.Value = "WM" Then
+         &l_rec_dmndline.IN_FULFILL_STATE.Visible = False;
+      Else
+         &l_rec_dmndline.QTY_SHIP_BASE.Visible = False;
+         &l_rec_dmndline.QTY_SHIPPED.Visible = False;
+      End-If;
+      If &l_rec_dmndline.RESERVE_STATUS.Value = "10" Or
+            &l_rec_dmndline.RESERVE_STATUS.Value = "99" Then /* gray out invalid demand */
+         &l_b_invaliddmd = True;
+         &l_rec_dmndline_wrk.SELECT_CB.Enabled = False;
+         &l_rec_dmndline.QTY_PICK_OVR_BASE.Enabled = False;
+         &l_rec_dmndline.QTY_PICK_OVRIDE.Enabled = False;
+         &l_rec_dmndline_wrk.IN_SW_LINE_ACTION.Enabled = False;
+      End-If;
+      
+      If &l_rec_dmndline.SOFT_ALLOC_FLG.Value = "Y" Then
+         &l_n_open_std = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_ALLOC_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+         &l_n_open_Orderuom = &l_rec_dmndline.QTY_REQUESTED.Value - &l_rec_dmndline.QTY_ALLOCATED.Value - &l_rec_dmndline.QTY_BACKORDER.Value - &l_rec_dmndline.QTY_SHIPPED.Value;
+         &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_ALLOC_BASE.Value;
+         &l_rec_dmndline.QTY_PICK_OVRIDE.Value = &l_rec_dmndline.QTY_ALLOCATED.Value;
+         &l_rec_dmndline_wrk.IN_SW_DEMAND_STAT.Value = "01";
+      Else
+         If &a_rset_dmndlines(&i).MASTER_ITEM_TBL.PROMISE_OPTION.Value = "2" Then
+            &l_n_open_std = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_PROMISED_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+            &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_PROMISED_BASE.Value;
+            &l_s_stduom = &a_rset_dmndlines(&i).MASTER_ITEM_TBL.UNIT_MEASURE_STD.Value;
+            %This.UOMconvert(&l_rec_dmndline.INV_ITEM_ID.Value, &l_s_stduom, &l_s_stduom, &l_rec_dmndline.UNIT_OF_MEASURE.Value, &l_rec_dmndline.QTY_PROMISED_BASE.Value, &l_n_qty_to);
+            &l_rec_dmndline.QTY_PICK_OVRIDE.Value = &l_n_qty_to;
+            &l_n_open_Orderuom = &l_rec_dmndline.QTY_REQUESTED.Value - &l_rec_dmndline.QTY_BACKORDER.Value - &l_n_qty_to - &l_rec_dmndline.QTY_SHIPPED.Value;
+            &l_rec_dmndline_wrk.IN_SW_DEMAND_STAT.Value = "03";
+            <* 9.0 Disallow qty override for WM promised items *>
+            If &l_rec_dmndline.DEMAND_SOURCE.Value = "WM" Then
+               &l_rec_dmndline.QTY_PICK_OVR_BASE.Enabled = False;
+               &l_rec_dmndline.QTY_PICK_OVRIDE.Enabled = False;
+            End-If;
+         Else
+            &l_n_open_std = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+            &l_n_open_Orderuom = &l_rec_dmndline.QTY_REQUESTED.Value - &l_rec_dmndline.QTY_BACKORDER.Value - &l_rec_dmndline.QTY_SHIPPED.Value;
+            &l_rec_dmndline_wrk.IN_SW_DEMAND_STAT.Value = "02";
+            
+            /* FA issue #138.planned release qty computation was not correct for non-soft non-atp item */
+            If &l_rec_dmndline.IN_ZERO_PICKED_FLG.Value = "Y" Then
+               &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = 0;
+               &l_rec_dmndline.QTY_PICK_OVRIDE.Value = 0;
+            Else
+               If &l_rec_dmndline.QTY_PICK_OVR_BASE.Value <= 0 Then
+                  &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+                  &l_rec_dmndline.QTY_PICK_OVRIDE.Value = &l_rec_dmndline.QTY_REQUESTED.Value - &l_rec_dmndline.QTY_BACKORDER.Value - &l_rec_dmndline.QTY_SHIPPED.Value;
+               End-If;
+            End-If;
+         End-If;
+      End-If;
+      
+      If &l_n_open_std < 0 Then
+         &l_n_open_std = 0;
+      End-If;
+      &l_rec_dmndline.QTY_OPEN_STD.Value = &l_n_open_std;
+      If &l_n_open_Orderuom < 0 Then
+         &l_n_open_Orderuom = 0;
+      End-If;
+      &l_rec_dmndline.QTY_OPEN_DEMAND.Value = &l_n_open_Orderuom;
+      
+      /* compute qty allocated if the hard_alloc_Flag is set */
+      If &l_rec_dmndline.HARD_ALLOC_FLAG.Value = "Y" Then
+         SQLExec("SELECT Sum(QTY_BASE)  FROM PS_DEMAND_PHYS_INV  WHERE BUSINESS_UNIT=:1    AND DEMAND_SOURCE=:2    AND SOURCE_BUS_UNIT=:3    AND ORDER_NO=:4    AND ORDER_INT_LINE_NO=:5    AND SCHED_LINE_NBR=:6    AND INV_ITEM_ID=:7    AND DEMAND_LINE_NO=:8 ", &l_rec_dmndline.BUSINESS_UNIT.Value, &l_rec_dmndline.DEMAND_SOURCE.Value, &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_rec_dmndline.ORDER_INT_LINE_NO.Value, &l_rec_dmndline.SCHED_LINE_NBR.Value, &l_rec_dmndline.INV_ITEM_ID.Value, &l_rec_dmndline.DEMAND_LINE_NO.Value, &l_n_qtyalloc_base);
+         &l_rec_dmndline.QTY_PRE_ALLOC_BASE.Value = &l_n_qtyalloc_base;
+         /* convert to Order UOM and populate IN_SW_ORDP_2_VW.QTY_ALLOCATED from std to Order uom */
+         &l_s_stduom = &a_rset_dmndlines(&i).MASTER_ITEM_TBL.UNIT_MEASURE_STD.Value;
+         %This.UOMconvert(&l_rec_dmndline.INV_ITEM_ID.Value, &l_s_stduom, &l_s_stduom, &l_rec_dmndline.UNIT_OF_MEASURE.Value, &l_rec_dmndline.QTY_PICK_OVR_BASE.Value, &l_n_qty_to);
+         &l_rec_dmndline.QTY_PRE_ALLOC.Value = &l_n_qty_to;
+      End-If;
+      
+      If &l_b_bufferrowset Then
+         /* compute qty Pegged if peg status is 10 or 20*/
+         &l_n_qtyalloc_base = 0;
+         If &l_rec_dmndline.PEG_STATUS.Value = "10" Or
+               &l_rec_dmndline.PEG_STATUS.Value = "20" Then
+            Evaluate &l_rec_dmndline.DEMAND_SOURCE.Value
+            When = "WM"
+               SQLExec("SELECT Sum(QTY_PEGGED - QTY_COMPLETE) FROM PS_WM_WO_MAT_HASH A, PS_IN_PEGGING B WHERE A.HASH_KEY =B.DEMAND_HASH AND B.PEG_STATUS = '10' AND B.DMD_ORDER_TYPE= '110' AND A.BUSINESS_UNIT=:1 AND A.WO_ID=:2 AND A.WO_TASK_ID=:3 AND A.RES_LN_NBR=:4 ", &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_rec_dmndline.ORDER_INT_LINE_NO.Value, &l_rec_dmndline.SCHED_LINE_NBR.Value, &l_n_qtyalloc_base);
+               Break;
+            When = "OM"
+               SQLExec("SELECT Sum(QTY_PEGGED - QTY_COMPLETE)  FROM PS_IN_DEMAND_HASH A, PS_IN_PEGGING B    where A.HASH_KEY =B.DEMAND_HASH AND B.PEG_STATUS = '10' AND B.DMD_ORDER_TYPE= '090' AND A.BUSINESS_UNIT=:1    AND A.DEMAND_SOURCE=:2    AND A.SOURCE_BUS_UNIT=:3    AND A.ORDER_NO=:4    AND A.ORDER_INT_LINE_NO=:5    AND A.SCHED_LINE_NBR=:6    AND A.INV_ITEM_ID=:7    AND A.DEMAND_LINE_NO=:8 ", &l_rec_dmndline.BUSINESS_UNIT.Value, &l_rec_dmndline.DEMAND_SOURCE.Value, &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_rec_dmndline.ORDER_INT_LINE_NO.Value, &l_rec_dmndline.SCHED_LINE_NBR.Value, &l_rec_dmndline.INV_ITEM_ID.Value, &l_rec_dmndline.DEMAND_LINE_NO.Value, &l_n_qtyalloc_base);
+               Break;
+            When = "IN"
+               If &l_rec_dmndline.INTERUNIT_FLG.Value = "N" Then
+                  SQLExec("SELECT Sum(QTY_PEGGED - QTY_COMPLETE)  FROM PS_IN_DEMAND_HASH A, PS_IN_PEGGING B    where A.HASH_KEY =B.DEMAND_HASH AND B.PEG_STATUS = '10' AND B.DMD_ORDER_TYPE ='070' AND A.BUSINESS_UNIT=:1    AND A.DEMAND_SOURCE=:2    AND A.SOURCE_BUS_UNIT=:3    AND A.ORDER_NO=:4    AND A.ORDER_INT_LINE_NO=:5    AND A.SCHED_LINE_NBR=:6    AND A.INV_ITEM_ID=:7    AND A.DEMAND_LINE_NO=:8 ", &l_rec_dmndline.BUSINESS_UNIT.Value, &l_rec_dmndline.DEMAND_SOURCE.Value, &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_rec_dmndline.ORDER_INT_LINE_NO.Value, &l_rec_dmndline.SCHED_LINE_NBR.Value, &l_rec_dmndline.INV_ITEM_ID.Value, &l_rec_dmndline.DEMAND_LINE_NO.Value, &l_n_qtyalloc_base);
+               Else
+                  SQLExec("SELECT Sum(QTY_PEGGED - QTY_COMPLETE)  FROM PS_IN_DEMAND_HASH A, PS_IN_PEGGING B    where A.HASH_KEY =B.DEMAND_HASH AND B.PEG_STATUS = '10' AND B.DMD_ORDER_TYPE ='030' AND A.BUSINESS_UNIT=:1    AND A.DEMAND_SOURCE=:2    AND A.SOURCE_BUS_UNIT=:3    AND A.ORDER_NO=:4    AND A.ORDER_INT_LINE_NO=:5    AND A.SCHED_LINE_NBR=:6    AND A.INV_ITEM_ID=:7    AND A.DEMAND_LINE_NO=:8 ", &l_rec_dmndline.BUSINESS_UNIT.Value, &l_rec_dmndline.DEMAND_SOURCE.Value, &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_rec_dmndline.ORDER_INT_LINE_NO.Value, &l_rec_dmndline.SCHED_LINE_NBR.Value, &l_rec_dmndline.INV_ITEM_ID.Value, &l_rec_dmndline.DEMAND_LINE_NO.Value, &l_n_qtyalloc_base);
+               End-If;
+               Break;
+            End-Evaluate;
+            
+            &l_rec_dmndline.QTY_PEGGED.Value = &l_n_qtyalloc_base;
+         End-If;
+         &l_rec_dmndline_wrk.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_PICK_OVR_BASE.Value;
+         &l_rec_dmndline_wrk.QTY_PICK_OVRIDE.Value = &l_rec_dmndline.QTY_PICK_OVRIDE.Value;
+         
+         &l_rec_dmndline_wrk.INV_ITEM_ID.Label = &l_rec_dmndline.INV_ITEM_ID.Value;
+         
+         &l_rec_dmndline_wrk.IN_SW_SOURCE_KEY.Value = &l_rec_dmndline.DEMAND_SOURCE.Value | "/" | &l_rec_dmndline.SOURCE_BUS_UNIT.Value;
+         /*kaplan -- hvo -- 2020-06-17 -- Replade / with - */
+         &l_rec_dmndline_wrk.IN_SW_ORDER_KEY.Value = &l_rec_dmndline.ORDER_NO.Value | "-" | &l_rec_dmndline.ORDER_INT_LINE_NO.Value | "-" | &l_rec_dmndline.SCHED_LINE_NBR.Value | "-" | &l_rec_dmndline.DEMAND_LINE_NO.Value;
+         /* 9.0 ALM seed wo type for each demand line */
+         If &l_rec_dmndline.DEMAND_SOURCE.Value = "WM" Then
+            SQLExec("SELECT A.WO_TYPE,A.SHOP_ID,C.DESCR FROM PS_WM_WO_HDR A,PS_SET_CNTRL_REC B,PS_WM_WO_TYPE C WHERE B.REC_GROUP_ID = 'WM_03' AND B.RECNAME = 'WM_WO_TYPE' AND B.SETCNTRLVALUE = A.BUSINESS_UNIT AND C.SETID = B.SETID AND A.WO_TYPE = C.WO_TYPE AND A.BUSINESS_UNIT = :1 AND A.WO_ID=:2", &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_s_WO_TYPE, &l_s_SHOP_ID, &l_s_descr);
+            &l_rec_dmndline_wrk.WO_TYPE.Value = &l_s_WO_TYPE;
+            &l_rec_dmndline_wrk.SHOP_ID.Value = &l_s_SHOP_ID;
+            &l_rec_dmndline_wrk.DESCR.Value = &l_s_descr;
+         End-If;
+         <* ICE:1535989000 START IF demand lines is invalid disable reason code and comment field*>
+         If %This.PromptForReasonCode <> "N" And
+               &l_rec_dmndline.RESERVE_STATUS.Value <> "10" And
+               &l_rec_dmndline.RESERVE_STATUS.Value <> "99" Then
+            <* ICE:1535989000 END IF demand lines is invalid disable reason code and comment field*>
+            &l_rec_dmndline.REASON_CD.Visible = True;
+            &l_rec_dmndline.COMMENTS_254.Visible = True;
+         Else
+            &l_rec_dmndline.REASON_CD.Visible = False;
+            &l_rec_dmndline.COMMENTS_254.Visible = False;
+         End-If;
+         
+      End-If;
+      /* if lot allocated disable pick override qty fields*/
+      If &l_rec_dmndline.LOT_ALLOC_FLG.Value = "Y" Or
+            &l_rec_dmndline.APPROVED_FLAG.Value <> "Y" Then
+         &l_rec_dmndline.QTY_PICK_OVR_BASE.Enabled = False;
+         &l_rec_dmndline.QTY_PICK_OVRIDE.Enabled = False;
+      End-If;
+   End-For;
+   If &l_b_invaliddmd Then
+      MessageBox(0, "", 11100, 2819, "There are demand lines that are invalid or pending validation.");
+   End-If;
+end-method;
+
+/**
+* Set the qty to qty requested, qty allocated or qty pick confirmed based on the current state of the demand
+* Primarily for rowset that are not in the buffer
+* @param  None
+* @return none
+*
+*/
+method SetDemandLinesQtyNonBuffer
+   /+ &a_rset_dmndlines as Rowset +/
+   Local string &l_s_stduom, &l_s_setid, &l_s_promiseoption, &l_s_reservetype;
+   Local integer &i, &l_i_rowcount;
+   Local number &l_n_qtyalloc_base, &l_n_open_std;
+   Local Record &l_rec_dmndline;
+   
+   &l_s_setid = &i_s_setid_item;
+   &l_i_rowcount = &a_rset_dmndlines.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      &l_rec_dmndline = &a_rset_dmndlines(&i).GetRecord(@("RECORD." | &a_rset_dmndlines.DBRecordName));
+      SQLExec("SELECT PROMISE_OPTION,UNIT_MEASURE_STD FROM PS_MASTER_ITEM_TBL WHERE SETID=:1 AND INV_ITEM_ID=:2", &l_s_setid, &l_rec_dmndline.INV_ITEM_ID.Value, &l_s_promiseoption, &l_s_stduom);
+      
+      If &l_rec_dmndline.SOFT_ALLOC_FLG.Value = "Y" Then
+         &l_n_open_std = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_ALLOC_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+         &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_ALLOC_BASE.Value;
+         &l_s_reservetype = "01";
+      Else
+         If &l_s_promiseoption = "2" Then
+            &l_n_open_std = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_PROMISED_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+            &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_PROMISED_BASE.Value;
+            &l_s_reservetype = "03";
+         Else
+            &l_n_open_std = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+            &l_s_reservetype = "02";
+            /* FA issue #138.planned release qty computation was not correct for non-soft non-atp item */
+            If &l_rec_dmndline.IN_ZERO_PICKED_FLG.Value = "Y" Then
+               &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = 0;
+               &l_rec_dmndline.QTY_PICK_OVRIDE.Value = 0;
+            Else
+               If &l_rec_dmndline.QTY_PICK_OVR_BASE.Value <= 0 Then
+                  &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value - &l_rec_dmndline.QTY_SHIP_BASE.Value;
+                  &l_rec_dmndline.QTY_PICK_OVRIDE.Value = &l_rec_dmndline.QTY_REQUESTED.Value - &l_rec_dmndline.QTY_BACKORDER.Value - &l_rec_dmndline.QTY_SHIPPED.Value;
+               End-If;
+            End-If;
+         End-If;
+      End-If;
+      &l_rec_dmndline.IN_SW_DEMAND_STAT.Value = &l_s_reservetype;
+      
+      If &l_n_open_std < 0 Then
+         &l_n_open_std = 0;
+      End-If;
+      &l_rec_dmndline.QTY_OPEN_STD.Value = &l_n_open_std;
+      
+      /* compute qty allocated if the hard_alloc_Flag is set */
+      If &l_rec_dmndline.HARD_ALLOC_FLAG.Value = "Y" Then
+         SQLExec("SELECT Sum(QTY_BASE)  FROM PS_DEMAND_PHYS_INV  WHERE BUSINESS_UNIT=:1    AND DEMAND_SOURCE=:2    AND SOURCE_BUS_UNIT=:3    AND ORDER_NO=:4    AND ORDER_INT_LINE_NO=:5    AND SCHED_LINE_NBR=:6    AND INV_ITEM_ID=:7    AND DEMAND_LINE_NO=:8 ", &l_rec_dmndline.BUSINESS_UNIT.Value, &l_rec_dmndline.DEMAND_SOURCE.Value, &l_rec_dmndline.SOURCE_BUS_UNIT.Value, &l_rec_dmndline.ORDER_NO.Value, &l_rec_dmndline.ORDER_INT_LINE_NO.Value, &l_rec_dmndline.SCHED_LINE_NBR.Value, &l_rec_dmndline.INV_ITEM_ID.Value, &l_rec_dmndline.DEMAND_LINE_NO.Value, &l_n_qtyalloc_base);
+         &l_rec_dmndline.QTY_PRE_ALLOC_BASE.Value = &l_n_qtyalloc_base;
+      End-If;
+   End-For;
+end-method;
+
+/**
+     * Controls what action are displayed in the actions drop down list based on the
+     * template definition
+     *
+     * @param 1 &a_rset_temp: Name of the rowset
+     * @return None
+     */
+method ControlActionsDDLB
+   /+ &a_fld_action as Field +/
+   &a_fld_action.ClearDropDownList();
+   Local string &l_s_xlat_list = &i_o_SelectionTemplate.GetAllowedXlatValues(&a_fld_action.Name);
+   Local array of string &l_as_xlatlist = Split(&l_s_xlat_list, ";");
+   %This.AddDropDownItem(&a_fld_action, &a_fld_action.Name, &l_as_xlatlist, True);
+end-method;
+
+
+/**
+*Methods prorate the the avail qty across multiple demand lines
+* @param  None
+* @return none
+*
+*/
+method ProrateQty
+   
+   Local number &l_n_current_qty, &l_n_transqty, &l_n_percentqty, &l_n_openqty, &l_n_transqty_old;
+   Local number &l_n_availqty, &l_n_startqty, &l_n_proratepercent, &l_n_qty_orderuom, &l_n_prorate_qty;
+   Local string &l_s_prorate_mthd, &l_s_orderuom, &l_s_stduom, &l_s_itemid;
+   Local Row &l_row_buitems = GetLevel0()(1).GetRowset(Scroll.IN_SW_BUITEM_VW).GetRow(1);
+   &l_n_availqty = &l_row_buitems.IN_SW_BUITEM_VW.QTY_AVAILABLE.Value;
+   &l_s_stduom = &l_row_buitems.IN_SW_BUITEM_VW.UNIT_MEASURE_STD.Value;
+   &l_s_itemid = &l_row_buitems.IN_SW_BUITEM_VW.INV_ITEM_ID.Value;
+   
+   If All(IN_SW_SEL_4_WRK.IN_SW_PROATE_LIMIT) Then
+      &l_n_startqty = IN_SW_SEL_4_WRK.IN_SW_PROATE_LIMIT;
+   Else
+      &l_n_startqty = &l_n_availqty;
+   End-If;
+   
+   
+   &l_n_proratepercent = IN_SW_SEL_4_WRK.IN_SW_PRORATE_PERC;
+   &l_n_prorate_qty = IN_SW_SEL_4_WRK.PRORATE_QTY;
+   &l_s_prorate_mthd = IN_SW_SEL_4_WRK.IN_SW_PRORATE_MTHD;
+   Local Rowset &l_rset_dmndlines;
+   Local Record &l_rec_dmndline;
+   Local integer &i, &l_i_rowcount;
+   &l_rset_dmndlines = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_4_VW);
+   
+   &l_i_rowcount = &l_rset_dmndlines.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      &l_rec_dmndline = &l_rset_dmndlines(&i).IN_SW_ORDP_4_VW;
+      If &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.SELECT_CB.Enabled = False Or
+            &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "N" Or
+            &l_rec_dmndline.LOT_ALLOC_FLG.Value = "Y" Or
+            &l_rec_dmndline.APPROVED_FLAG.Value <> "Y" Then
+         
+         Continue;
+      End-If;
+      &l_s_orderuom = &l_rec_dmndline.UNIT_OF_MEASURE.Value;
+      If &l_n_startqty > 0 Or
+            &l_n_availqty > 0 Then
+         &l_n_openqty = &l_rec_dmndline.QTY_OPEN_STD.Value;
+         
+         Evaluate &l_s_prorate_mthd
+         When = "3" /* % of qty requested */
+            &l_n_percentqty = Round(&l_n_proratepercent * (&l_rec_dmndline.QTY_REQUESTED_BASE.Value - - &l_rec_dmndline.QTY_BACKORDER_BASE.Value) / 100, 0);
+            If &l_n_percentqty < &l_n_openqty Then
+               &l_n_openqty = &l_n_percentqty;
+            End-If;
+         When = "4" /* max qty by line*/
+            &l_n_percentqty = &l_n_prorate_qty;
+            If &l_n_percentqty < &l_n_openqty Then
+               &l_n_openqty = &l_n_percentqty;
+            End-If;
+         End-Evaluate;
+         
+         /* Transaction qty is Min(start qty, open demand qty) */
+         If &l_n_openqty > &l_n_startqty Then
+            &l_n_transqty = &l_n_startqty;
+         Else
+            &l_n_transqty = &l_n_openqty;
+         End-If;
+         
+         /* Transaction qty is Min(avail qty,start qty, open demand qty) */
+         If &l_n_transqty > &l_n_availqty Then
+            &l_n_transqty = &l_n_availqty;
+         End-If;
+         
+         /*Tranaction qty is Min(qty pick override+transaction qty, qty requested) */
+         &l_n_current_qty = &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.QTY_PICK_OVR_BASE.Value;
+         If &l_n_transqty + &l_n_current_qty > (&l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value) Then
+            &l_n_transqty = (&l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value) - &l_n_current_qty;
+         Else
+            &l_n_transqty = &l_n_transqty;
+         End-If;
+         &l_n_transqty_old = &l_n_transqty;
+         /* Convert open qty to order uom and then back to make sure open qty is a integral multiple of order uom */
+         %This.UOMconvert(&l_s_itemid, &l_s_stduom, &l_s_stduom, &l_s_orderuom, &l_n_transqty, &l_n_qty_orderuom);
+         %This.UOMconvert(&l_s_itemid, &l_s_stduom, &l_s_orderuom, &l_s_stduom, &l_n_qty_orderuom, &l_n_transqty);
+         If &l_n_transqty_old < &l_n_transqty Then
+            &l_n_qty_orderuom = &l_n_qty_orderuom - 1;
+            If &l_n_qty_orderuom < 0 Then
+               &l_n_qty_orderuom = 0;
+            End-If;
+            %This.UOMconvert(&l_s_itemid, &l_s_stduom, &l_s_orderuom, &l_s_stduom, &l_n_qty_orderuom, &l_n_transqty);
+         End-If;
+         
+         &l_rec_dmndline.QTY_PICK_OVR_BASE.Value = &l_n_transqty + &l_n_current_qty;
+         &l_rec_dmndline.QTY_PICK_OVRIDE.Value = &l_n_qty_orderuom + &l_rset_dmndlines(&i).IN_SW_SEL_3_WRK.QTY_PICK_OVRIDE.Value;
+         
+         &l_n_availqty = &l_n_availqty - &l_n_transqty;
+         &l_n_startqty = &l_n_startqty - &l_n_transqty;
+      Else
+      End-If;
+   End-For;
+end-method;
+
+/**
+* Retrieves the list ofvalid demand lines for orders selected in the summary page
+* @param1  &a_rset_demand Demand lines rowset into which demand lines should be retrieved
+ * @Return integer: number of demand lines retreived
+*/
+method RetrievDemandLinesFromSelectedOrders
+   /+ &a_rset_orders as Rowset, +/
+   /+ &a_rset_demand as Rowset out +/
+   /+ Returns Integer +/
+   &a_rset_demand.Flush();
+   Local integer &i, &j, &l_i_rowcount, &l_i_start, &l_i_end;
+   Local Record &l_rec_dmnd;
+   Local string &l_s_sql;
+   Local string &l_s_resultset = "SELECT A.BUSINESS_UNIT ,A.DEMAND_SOURCE ,A.SOURCE_BUS_UNIT ,A.ORDER_NO ,A.ORDER_INT_LINE_NO ,A.SCHED_LINE_NBR ,A.INV_ITEM_ID ,A.DEMAND_LINE_NO ";
+   &l_s_resultset = &l_s_resultset | ",A.IN_FULFILL_STATE ,A.PRIORITY_NBR ,'EA' ,A.QTY_REQUESTED_BASE ,A.QTY_ALLOC_BASE ,A.QTY_BACKORDER_BASE ,A.QTY_PROMISED_BASE ,0 ,A.QTY_PICK_OVR_BASE ,A.UNIT_OF_MEASURE ,A.QTY_REQUESTED ,A.QTY_ALLOCATED ,A.QTY_BACKORDER ,0 ,A.QTY_PICK_OVRIDE ,A.SHIP_ID ,A.CARRIER_ID ,A.SHIP_TYPE_ID ,A.ROUTE_CD ,A.LOAD_ID ,A.LOCATION ,A.DESTIN_BU ,A.CUST_ID ,A.CUST_NAME ,A.SHIP_TO_CUST_ID ,A.ADDRESS_SEQ_NUM ,A.VMI_DESTIN_SHIPTO ,A.PICK_BATCH_ID ,A.PICKLIST_LINE_NO ,A.TMS_EXT_REF_ID ,A.TMS_EXT_REF_LN_NBR ,A.EXT_REF_NBR ,A.EXT_REF_LN_NBR ,A.INTERUNIT_FLG ,A1.SOFT_ALLOC_FLG ,%datetimeout(A.SCHED_DTTM) ,A.HARD_ALLOC_FLAG,A.LOT_ALLOC_FLG,A.RESERVE_STATUS,A.IN_LINE_BO_RULE,A.FULFILL_FLAG,A.APPROVED_FLAG,A.BACKORDER_CREATED,A.LAST_MAINT_OPRID,%datetimeout(A.DT_TIMESTAMP),A.SHIP_ID_EST,A.PARENT_PROD_ID,A.PRODUCT_ID,0,A.PEG_STATUS,%datetimeout(A.RESERVED_DTTM),A.IN_LINE_RESV_RULE,A.IN_LN_RESV_BO_RULE,A.IN_ORDER_RESV_RULE,A.OPTIONAL_SHIP,0,0,A.PARTIAL_QTY_FLAG,";
+   &l_s_resultset = &l_s_resultset | " A.IN_PRIOR_STATE ,A.SUP_PEG_STATUS,'',%datetimeout(A.CANCEL_DTTM),%dateout(A.IN_PROCESS_DATE),A.IN_ZERO_PICKED_FLG,A.BCKORDR_CNCL_FLAG,A.QTY_PER,A.QTY_CODE,A.INTERUNIT_STAT,A.QTY_SHIP_BASE,A.QTY_SHIPPED,' ',' ',0, A.QTY_PACK_BASE,A.BCKORDER_FLAG, A.DELIVERY_ID ";
+   
+   Local string &l_s_demandlock = " AND RESERVE_STATUS <> '10' AND RESERVE_STATUS <> '99' AND NOT EXISTS(SELECT * FROM PS_IN_DEMAND_LOCK IDL1 WHERE IDL1.BUSINESS_UNIT = 	A.BUSINESS_UNIT  AND IDL1.DEMAND_SOURCE = 	A.DEMAND_SOURCE  AND IDL1.SOURCE_BUS_UNIT = 	A.SOURCE_BUS_UNIT  AND IDL1.ORDER_NO = 		A.ORDER_NO  AND IDL1.ORDER_INT_LINE_NO = A.ORDER_INT_LINE_NO AND IDL1.SCHED_LINE_NBR = 	A.SCHED_LINE_NBR  AND IDL1.INV_ITEM_ID = 	A.INV_ITEM_ID  AND IDL1.DEMAND_LINE_NO =	A.DEMAND_LINE_NO)  ";
+   Local integer &l_i_retcode;
+   &l_i_start = 1;
+   &l_i_rowcount = &a_rset_orders.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      &l_s_sql = " ";
+      If &a_rset_orders(&i).IN_SW_SEL_3_WRK.SELECT_CB.Enabled And
+            &a_rset_orders(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "Y" Then
+         &l_rec_dmnd = &a_rset_orders(&i).IN_SW_ORDP_1_VW;
+         
+         If &l_rec_dmnd.ORDER_NO.Visible Then /* order based */
+            &l_s_sql = &l_s_sql | "  (A.DEMAND_SOURCE= '" | &l_rec_dmnd.DEMAND_SOURCE.Value | "' AND A.SOURCE_BUS_UNIT= '" | &l_rec_dmnd.SOURCE_BUS_UNIT.Value | "' AND A.ORDER_NO= '" | &l_rec_dmnd.ORDER_NO.Value | "') ";
+         Else
+            If &l_rec_dmnd.SOURCE_BUS_UNIT.Visible Then /* kit based */
+               If &a_rset_orders(&i).IN_SW_SEL_3_WRK.IN_SW_ORDER_KEY.Visible Then /* kit detail based */
+                  &l_s_sql = &l_s_sql | "  (A.DEMAND_SOURCE= '" | &l_rec_dmnd.DEMAND_SOURCE.Value | "' AND A.SOURCE_BUS_UNIT= '" | &l_rec_dmnd.SOURCE_BUS_UNIT.Value | "' AND A.ORDER_NO= '" | &l_rec_dmnd.ORDER_NO.Value | "'  AND A.ORDER_INT_LINE_NO =" | &l_rec_dmnd.ORDER_INT_LINE_NO.Value | " AND A.SCHED_LINE_NBR=" | &l_rec_dmnd.SCHED_LINE_NBR.Value | " AND A.PARENT_PROD_ID= '" | &l_rec_dmnd.PARENT_PROD_ID.Value | "')";
+               Else
+                  &l_s_sql = &l_s_sql | "  (A.SOURCE_BUS_UNIT= '" | &l_rec_dmnd.SOURCE_BUS_UNIT.Value | "' AND A.PARENT_PROD_ID= '" | &l_rec_dmnd.PARENT_PROD_ID.Value | "') ";
+               End-If;
+            Else /* item based */
+               &l_s_sql = &l_s_sql | "  (A.INV_ITEM_ID= '" | &l_rec_dmnd.INV_ITEM_ID.Value | "' ) ";
+            End-If;
+         End-If;
+         
+         &l_s_sql = "  AND ( " | &l_s_sql | &l_s_demandlock | ") ";
+         If &a_rset_demand.ActiveRowCount > 1 Then
+            &l_i_start = &a_rset_demand.ActiveRowCount + 1;
+         Else
+            &l_i_start = 1;
+         End-If;
+         &l_i_end = %This.RetrieveDemandDynamic(&a_rset_demand, &l_s_resultset, &l_s_sql);
+         &l_i_end = &a_rset_demand.ActiveRowCount;
+         For &j = &l_i_start To &l_i_end
+            &a_rset_demand(&j).IN_SW_ORDP_5_VW.REASON_CD.Value = &l_rec_dmnd.REASON_CD.Value;
+            &a_rset_demand(&j).IN_SW_ORDP_5_VW.COMMENTS_254.Value = &l_rec_dmnd.COMMENTS_254.Value;
+         End-For;
+      End-If;
+   End-For;
+   
+   %This.SetDemandLinesQtyNonBuffer(&a_rset_demand);
+   Return &a_rset_demand.ActiveRowCount;
+end-method;
+
+
+
+
+/**
+* Converts from std uom to Order UOM and viceversa
+   * @param  1 &a_s_itemusage_type :
+   * @return -1: if not group or detail, 0: if no rows, 1:sucess
+*
+   * @param 1 &a_s_itemid Item id
+   * @param 2 &a_s_uom_base Based uom
+   * @param 3 &a_s_uom_from From UOM
+   * @param 4 &a_s_uom_to   To UOM
+   * @param 5 &a_n_qty_from FROM qty
+   * @param 6 &a_n_qty_to   TO qty
+*/
+method UOMconvert
+   /+ &a_s_itemid as String, +/
+   /+ &a_s_uom_base as String, +/
+   /+ &a_s_uom_from as String, +/
+   /+ &a_s_uom_to as String, +/
+   /+ &a_n_qty_from as Number, +/
+   /+ &a_n_qty_to as Number out +/
+   
+   
+   If (&a_n_qty_from > 0) Then
+      If &a_s_uom_base = &a_s_uom_from And
+            &a_s_uom_base = &a_s_uom_to Then
+         &a_n_qty_to = &a_n_qty_from;
+      Else
+         Local number &l_n_MsgSet, &l_n_MsgNum;
+         Local string &l_s_qty_precision_from, &l_s_round_rule_from, &l_s_qty_precision_to, &l_s_round_rule_to;
+         Local number &l_n_conversion_rate_from, &l_n_conversion_rate_to, &l_n_dummy;
+         Local string &l_s_retcode;
+         Local boolean &l_b_retcode;
+         
+         /* convert from std uom to Order uom*/
+         If &a_s_uom_base = &a_s_uom_from Then
+            SQLExec("SELECT A.CONVERSION_RATE, A.QTY_PRECISION , A.ROUND_RULE FROM PS_INV_ITEM_UOM A WHERE A.SETID =:1 AND A.INV_ITEM_ID =:2 AND A.UNIT_OF_MEASURE =:3", &i_s_setid_item, &a_s_itemid, &a_s_uom_to, &l_n_conversion_rate_to, &l_s_qty_precision_to, &l_s_round_rule_to);
+            &l_b_retcode = &i_o_uomconversion.UOMConvertQty(&i_s_setid_item, %This.BusinessUnit, &a_s_itemid, &a_s_uom_from, "ORDR", &a_s_uom_from, &a_n_qty_from, 1, &l_s_qty_precision_from, &l_s_round_rule_from, "ORDR", &a_s_uom_to, &a_n_qty_to, &l_n_conversion_rate_to, &l_s_qty_precision_to, &l_s_round_rule_to, &l_n_MsgSet, &l_n_MsgNum, &l_s_retcode, &i_s_auto_round_opt, &l_n_dummy);
+         Else
+            /* convert from order uom to Std */
+            SQLExec("SELECT A.CONVERSION_RATE, A.QTY_PRECISION , A.ROUND_RULE FROM PS_INV_ITEM_UOM A WHERE A.SETID =:1 AND A.INV_ITEM_ID =:2 AND A.UNIT_OF_MEASURE =:3", &i_s_setid_item, &a_s_itemid, &a_s_uom_from, &l_n_conversion_rate_from, &l_s_qty_precision_from, &l_s_round_rule_from);
+            &l_b_retcode = &i_o_uomconversion.GetOrdrBaseQty(&i_s_setid_item, %This.BusinessUnit, &a_s_itemid, &a_s_uom_to, &a_s_uom_from, &a_n_qty_from, &l_n_conversion_rate_from, &l_s_round_rule_from, &a_n_qty_to, &l_n_conversion_rate_to, &l_s_qty_precision_to, &l_n_MsgSet, &l_n_MsgNum, &l_s_retcode, &i_s_auto_round_opt);
+         End-If;
+      End-If;
+   Else
+      &a_n_qty_to = 0;
+   End-If;
+end-method;
+
+
+/**
+* Converts from std uom to Order UOM and viceversa
+   * @param  1 &a_s_itemusage_type :
+   * @return -1: if not group or detail, 0: if no rows, 1:sucess
+*
+   * @param 1 &a_s_itemid Item id
+   * @param 2 &a_s_uom_base Based uom
+   * @param 3 &a_s_uom_from From UOM
+   * @param 4 &a_s_uom_to   To UOM
+   * @param 5 &a_n_qty_from FROM qty
+   * @param 6 &a_n_qty_to   TO qty
+   * @return boolean True: if conversion is successful, false otherwise
+*/
+method UOMconvertWithMSG
+   /+ &a_s_itemid as String, +/
+   /+ &a_s_uom_base as String, +/
+   /+ &a_s_uom_from as String, +/
+   /+ &a_s_uom_to as String, +/
+   /+ &a_n_qty_from as Number, +/
+   /+ &a_n_qty_to as Number out +/
+   /+ Returns Boolean +/
+   
+   Local boolean &l_b_convert_success = True;
+   If (&a_n_qty_from > 0) Then
+      If &a_s_uom_base = &a_s_uom_from And
+            &a_s_uom_base = &a_s_uom_to Then
+         &a_n_qty_to = &a_n_qty_from;
+      Else
+         Local number &l_n_MsgSet, &l_n_MsgNum;
+         Local string &l_s_qty_precision_from, &l_s_round_rule_from, &l_s_qty_precision_to, &l_s_round_rule_to;
+         Local number &l_n_conversion_rate_from, &l_n_conversion_rate_to, &l_n_dummy;
+         Local string &l_s_retcode;
+         Local boolean &l_b_retcode;
+         
+         /* convert from std uom to Order uom*/
+         If &a_s_uom_base = &a_s_uom_from Then
+            SQLExec("SELECT A.CONVERSION_RATE, A.QTY_PRECISION , A.ROUND_RULE FROM PS_INV_ITEM_UOM A WHERE A.SETID =:1 AND A.INV_ITEM_ID =:2 AND A.UNIT_OF_MEASURE =:3", &i_s_setid_item, &a_s_itemid, &a_s_uom_to, &l_n_conversion_rate_to, &l_s_qty_precision_to, &l_s_round_rule_to);
+            &l_b_retcode = &i_o_uomconversion.UOMConvertQty(&i_s_setid_item, %This.BusinessUnit, &a_s_itemid, &a_s_uom_from, "ORDR", &a_s_uom_from, &a_n_qty_from, 1, &l_s_qty_precision_from, &l_s_round_rule_from, "ORDR", &a_s_uom_to, &a_n_qty_to, &l_n_conversion_rate_to, &l_s_qty_precision_to, &l_s_round_rule_to, &l_n_MsgSet, &l_n_MsgNum, &l_s_retcode, &i_s_auto_round_opt, &l_n_dummy);
+         Else
+            /* convert from order uom to Std */
+            SQLExec("SELECT A.CONVERSION_RATE, A.QTY_PRECISION , A.ROUND_RULE FROM PS_INV_ITEM_UOM A WHERE A.SETID =:1 AND A.INV_ITEM_ID =:2 AND A.UNIT_OF_MEASURE =:3", &i_s_setid_item, &a_s_itemid, &a_s_uom_from, &l_n_conversion_rate_from, &l_s_qty_precision_from, &l_s_round_rule_from);
+            &l_b_retcode = &i_o_uomconversion.GetOrdrBaseQty(&i_s_setid_item, %This.BusinessUnit, &a_s_itemid, &a_s_uom_to, &a_s_uom_from, &a_n_qty_from, &l_n_conversion_rate_from, &l_s_round_rule_from, &a_n_qty_to, &l_n_conversion_rate_to, &l_s_qty_precision_to, &l_n_MsgSet, &l_n_MsgNum, &l_s_retcode, &i_s_auto_round_opt);
+         End-If;
+         If &l_n_MsgNum > 0 Then
+            Evaluate &i_s_auto_round_opt
+            When "1" /* No warning */
+               &l_b_convert_success = True;
+               Break;
+            When = "2" /* Warning */
+               If MessageBox(36, MsgGetText(11100, 1134, "Whole Number Required"), 11100, 2799, "The Quantity Entered is Being Changed To. Continue?", &a_s_uom_from, &a_s_uom_to) <> 6 Then
+                  &l_b_convert_success = False;
+                  Error (MsgGetText(11100, 1469, "Please enter a different quantity."));
+               Else
+                  &l_b_convert_success = True;
+               End-If;
+               Break;
+            When = "3" /* Error */
+               &l_b_convert_success = False;
+               Error MsgGet(11100, 1469, "Please enter a different quantity. ");
+               Break;
+            End-Evaluate;
+         End-If;
+      End-If;
+   Else
+      &a_n_qty_to = 0;
+   End-If;
+   Return &l_b_convert_success;
+end-method;
+
+
+method AutoRefreshDataAfterActionEnd
+   If &i_s_autorefresh = "Y" Then
+      Evaluate %Page
+      When = "IN_SW_ORDERPOOL"
+         Local boolean &l_b_orders = %This.RefreshOrders(" ");
+         Break;
+      When = "IN_SW_DEMANDLINES"
+         %This.GotoDemandLines("3", GetLevel0()(1), " ");
+         Break;
+      When = "IN_SW_ITEMVIEW"
+         %This.GotoItemView("3", GetLevel0()(1), " ");
+         Break;
+      End-Evaluate
+   End-If;
+end-method;
+
+
+
+
+method VisibleEnableDemandFilter
+   Local boolean &l_b_enabled, &l_b_visible;
+   Local string &l_a_value;
+   Local Record &l_rec_temp;
+   Local Field &l_fld_temp;
+   &l_rec_temp = GetLevel0()(1).IN_SW_SEL_3_WRK;
+   
+   &l_fld_temp = &l_rec_temp.IN_SW_DIS_RSRV;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   &l_fld_temp = &l_rec_temp.IN_SW_INCL_BCKORD;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   &l_fld_temp = &l_rec_temp.IN_SW_PEGGED_LINES;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   &l_fld_temp = &l_rec_temp.IN_SW_INCL_PRERRV;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   &l_fld_temp = &l_rec_temp.IN_SW_DISP_SHORT;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   &l_fld_temp = &l_rec_temp.SELECT_RELEASABLE;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   &l_fld_temp = &l_rec_temp.SELECT_UNFULFILLED;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+   <* 9.0 *>
+   &l_fld_temp = &l_rec_temp.SELECT_WOLINES;
+   &i_o_SelectionTemplate.GetFieldStoreValueDisplayProperties(&l_fld_temp.Name, &l_a_value, &l_b_enabled, &l_b_visible);
+   &l_fld_temp.Enabled = &l_b_enabled;
+   &l_fld_temp.Visible = &l_b_visible;
+   
+end-method;
+
+
+/**
+* Generate priority ranking for demand lines in  a rowset
+* @param1  row Demand line row
+ * @Return none
+*/
+method AssignPriorityRankingRowset
+   /+ &a_rset_demandlines as Rowset, +/
+   /+ &a_s_recordname as String, +/
+   /+ &a_s_fieldname as String +/
+   
+   
+   &a_s_recordname = "RECORD." | &a_s_recordname;
+   &a_s_fieldname = "FIELD." | &a_s_fieldname;
+   
+   Local string &l_s_opr_id = %OperatorId;
+   Local integer &l_i_prcsinstance = Int(Rand() * 100000000);
+   Local datetime &l_dt_current = %Datetime;
+   
+   Local integer &i, &l_i_rowcount;
+   Local Record &l_rec_dmnd;
+   Local string &l_s_recordname = "RECORD." | &a_rset_demandlines.DBRecordName;
+   
+   
+   
+   Local Record &l_rec_tmp = CreateRecord(Record.IN_SW_PRIOR_TMP);
+   &l_i_rowcount = &a_rset_demandlines.ActiveRowCount;
+   /* insert rows into temp tables */
+   For &i = 1 To &l_i_rowcount
+      &l_rec_dmnd = &a_rset_demandlines(&i).GetRecord(@(&l_s_recordname));
+      &l_rec_tmp.SetDefault();
+      &l_rec_tmp.OPRID.Value = &l_s_opr_id;
+      &l_rec_tmp.PRCSINSTANCE.Value = &l_i_prcsinstance;
+      &l_rec_tmp.CREATEDTTM.Value = &l_dt_current;
+      &l_rec_tmp.BUSINESS_UNIT.Value = &l_rec_dmnd.BUSINESS_UNIT.Value;
+      &l_rec_tmp.DEMAND_SOURCE.Value = &l_rec_dmnd.DEMAND_SOURCE.Value;
+      &l_rec_tmp.SOURCE_BUS_UNIT.Value = &l_rec_dmnd.SOURCE_BUS_UNIT.Value;
+      &l_rec_tmp.ORDER_NO.Value = &l_rec_dmnd.ORDER_NO.Value;
+      &l_rec_tmp.ORDER_INT_LINE_NO.Value = &l_rec_dmnd.ORDER_INT_LINE_NO.Value;
+      &l_rec_tmp.SCHED_LINE_NBR.Value = &l_rec_dmnd.SCHED_LINE_NBR.Value;
+      &l_rec_tmp.INV_ITEM_ID.Value = &l_rec_dmnd.INV_ITEM_ID.Value;
+      &l_rec_tmp.DEMAND_LINE_NO.Value = &l_rec_dmnd.DEMAND_LINE_NO.Value;
+      &l_rec_tmp.Insert();
+   End-For;
+   
+   /* Fetch SQL*/
+   Local SQL &l_sql_priority;
+   Local string &l_s_temp, &l_s_BUSINESS_UNIT, &l_s_DEMAND_SOURCE, &l_s_SOURCE_BUS_UNIT, &l_s_ORDER_NO, &l_s_INV_ITEM_ID;
+   Local integer &j, &l_i_find, &l_i_array_counter, &l_i_PRIORITY_RANK, &l_i_ORDER_INT_LINE_NO, &l_i_SCHED_LINE_NBR, &l_i_DEMAND_LINE_NO;
+   Local array of array of any &l_aa_priority = CreateArrayRept(CreateArrayAny(), 0);
+   
+   
+   /* load a 2d array with priority ranking for demand lines with priority ranking */
+   For &j = 1 To 1
+      &l_sql_priority = GetSQL(@("SQL.IN_SW_PRIOR_RANKING" | &j), &l_s_opr_id, &l_i_prcsinstance, &l_dt_current);
+      
+      While &l_sql_priority.Fetch(&l_i_PRIORITY_RANK, &l_s_BUSINESS_UNIT, &l_s_DEMAND_SOURCE, &l_s_SOURCE_BUS_UNIT, &l_s_ORDER_NO, &l_i_ORDER_INT_LINE_NO, &l_i_SCHED_LINE_NBR, &l_s_INV_ITEM_ID, &l_i_DEMAND_LINE_NO)
+         &l_s_temp = &l_s_BUSINESS_UNIT | "/" | &l_s_DEMAND_SOURCE | "/" | &l_s_SOURCE_BUS_UNIT | "/" | &l_s_ORDER_NO | "/" | &l_i_ORDER_INT_LINE_NO | "/" | &l_i_SCHED_LINE_NBR | "/" | &l_s_INV_ITEM_ID | "/" | &l_i_DEMAND_LINE_NO;
+         &l_aa_priority.Push(&l_s_temp);
+         &l_i_array_counter = &l_i_array_counter + 1;
+         &l_aa_priority [&l_i_array_counter][2] = &l_i_PRIORITY_RANK;
+      End-While;
+      &l_sql_priority.Close();
+   End-For;
+   SQLExec("DELETE FROM PS_IN_SW_PRIOR_TMP WHERE OPRID = :1 AND PRCSINSTANCE = :2 AND CREATEDTTM = %DateTimeIn(:3) ", &l_s_opr_id, &l_i_prcsinstance, &l_dt_current);
+   
+   /* loop thru rows in rowset and match and set priority rank */
+   For &i = 1 To &l_i_rowcount
+      &l_rec_dmnd = &a_rset_demandlines(&i).GetRecord(@(&l_s_recordname));
+      &l_s_temp = &l_rec_dmnd.BUSINESS_UNIT.Value | "/" | &l_rec_dmnd.DEMAND_SOURCE.Value | "/" | &l_rec_dmnd.SOURCE_BUS_UNIT.Value | "/" | &l_rec_dmnd.ORDER_NO.Value | "/" | &l_rec_dmnd.ORDER_INT_LINE_NO.Value | "/" | &l_rec_dmnd.SCHED_LINE_NBR.Value | "/" | &l_rec_dmnd.INV_ITEM_ID.Value | "/" | &l_rec_dmnd.DEMAND_LINE_NO.Value;
+      &l_i_find = &l_aa_priority.Find(&l_s_temp);
+      If &l_i_find > 0 Then
+         &a_rset_demandlines(&i).GetRecord(@(&a_s_recordname)).GetField(@(&a_s_fieldname)).Value = &l_aa_priority [&l_i_find][2];
+      Else
+         &a_rset_demandlines(&i).GetRecord(@(&a_s_recordname)).GetField(@(&a_s_fieldname)).Value = 999;
+      End-If;
+   End-For;
+end-method;
+
+method ControlPeggingDDLB
+   /+ &a_row_dmnd as Row +/
+   /+ Returns String +/
+   Local Record &l_rec_dmnd = &a_row_dmnd.GetRecord(@("RECORD." | &a_row_dmnd.ParentRowset.DBRecordName));
+   Local integer &l_i_idx;
+   Local boolean &l_b_disable_peg;
+   Local string &l_s_actionlist = &i_s_lineaction;
+   Evaluate &l_rec_dmnd.DEMAND_SOURCE.Value
+   When = "OM"
+      If &i_b_PEG_SO Then
+         &l_b_disable_peg = True;
+      End-If;
+      Break;
+   When = "WM"
+      If &i_b_PEG_WSM Then
+         &l_b_disable_peg = True;
+      End-If;
+      Break;
+   When = "IN"
+      If &l_rec_dmnd.INTERUNIT_FLG.Value = "N" Then
+         If &i_b_PEG_MSR Then
+            &l_b_disable_peg = True;
+         End-If;
+      Else
+         If &i_b_PEG_XFR Then
+            &l_b_disable_peg = True;
+         End-If;
+      End-If;
+      Break;
+   When-Other
+      If &i_b_PEG_XFR And
+            &l_rec_dmnd.INTERUNIT_FLG.Value = "Y" Then
+         &l_b_disable_peg = True;
+      End-If;
+      Break;
+   End-Evaluate;
+   If &l_b_disable_peg Or
+         (&l_rec_dmnd.DEMAND_SOURCE.Value <> "WM" And
+            &l_rec_dmnd.IN_FULFILL_STATE.Value <> "20") Or
+         &l_rec_dmnd.APPROVED_FLAG.Value <> "Y" Or
+         &l_rec_dmnd.SOFT_ALLOC_FLG.Value <> "Y" Or
+         &i_s_VMI_UNIT_FLG = "Y" Then
+      &l_s_actionlist = Substitute(&l_s_actionlist, "21", "00");
+   End-If;
+   
+   If &l_b_disable_peg Or
+         &l_rec_dmnd.QTY_PEGGED.Value <= 0 Or
+         &l_rec_dmnd.APPROVED_FLAG.Value <> "Y" Or
+         &l_rec_dmnd.SOFT_ALLOC_FLG.Value <> "Y" Or
+         &i_s_VMI_UNIT_FLG = "Y" Then
+      &l_s_actionlist = Substitute(&l_s_actionlist, "25", "00");
+      
+   End-If;
+   <* <* 9.0 Disallow stock request inquiry for WM demand. Not needed 12/09/05*>
+   If &l_rec_dmnd.DEMAND_SOURCE.Value = "WM" Then
+      &l_s_actionlist = Substitute(&l_s_actionlist, "24", "00");
+   End-If;*>
+   
+   &l_s_actionlist = LTrim(RTrim(&l_s_actionlist, " "), " ");
+   Return &l_s_actionlist;
+end-method;
+
+method GenerateStateSQL
+   /+ Returns String +/
+   Local array of string &l_as_stateclauses = CreateArrayRept("", 0);
+   If IN_SW_SEL_3_WRK.SELECT_UNFULFILLED = "Y" Then
+      &l_as_stateclauses.Push(" ( " | &i_o_demandstatesql.UNFULFILLED_SQL | " ) ");
+   End-If;
+   If IN_SW_SEL_3_WRK.SELECT_RELEASABLE = "Y" Then
+      &l_as_stateclauses.Push(" ( " | &i_o_demandstatesql.RELEASABLE_SQL | " ) ");
+   End-If;
+   Local string &l_s_temp = %This.GetInUtilities().JoinClausesIfNonNull(&l_as_stateclauses, " OR ");
+   If All(&l_s_temp) Then
+      &l_s_temp = " AND (" | &l_s_temp | " )";
+   Else
+      &l_s_temp = " AND " | &i_o_demandstatesql.NO_RETRIEVAL_SQL;
+   End-If;
+   Return &l_s_temp;
+end-method;
+
+method SetPromptSQL
+   Local array of array of string &l_as_promptsql = CreateArrayRept(CreateArrayRept("", 0), 0);
+   
+   &l_as_promptsql.Push("TMS_EXT_REF_ID");
+   &l_as_promptsql [1].Push("SELECT DISTINCT BUSINESS_UNIT ,TMS_EXT_REF_ID FROM PS_IN_DEMAND  WHERE TMS_EXT_REF_ID <> ' ' AND FULFILL_FLAG = 'Y' ");
+   &l_as_promptsql.Push("TMS_EXT_REF_LN_NBR");
+   &l_as_promptsql [2].Push("SELECT DISTINCT BUSINESS_UNIT ,TMS_EXT_REF_ID,TMS_EXT_REF_LN_NBR FROM PS_IN_DEMAND WHERE TMS_EXT_REF_ID <> ' ' AND TMS_EXT_REF_LN_NBR > 0 AND FULFILL_FLAG = 'Y' ");
+   
+   Local string &l_s_statesql = %This.GenerateStateSQL();
+   Local integer &i, &l_i_arraycount;
+   &l_i_arraycount = &l_as_promptsql.Len;
+   For &i = 1 To &l_i_arraycount
+      &l_as_promptsql [&i][2] = &l_as_promptsql [&i][2] | &l_s_statesql;
+   End-For;
+   &i_o_SelectionTemplate.SeedMultiplePromptFieldSQLTextFromTo(&l_as_promptsql);
+end-method;
+
+method ControlAPPROVALDDLB
+   /+ Returns String +/
+   Local string &l_s_approvallist = &i_s_approvallist;
+   
+   If &i_s_AUTO_DEMD_APPROVE = "Y" Then
+      &l_s_approvallist = Substitute(&l_s_approvallist, "1", " ");
+   End-If;
+   If &i_s_AUTO_BCK_APPROVE = "Y" Then
+      &l_s_approvallist = Substitute(&l_s_approvallist, "2", " ");
+   End-If;
+   If &i_s_AUTO_PRT_APPROVE = "Y" Then
+      &l_s_approvallist = Substitute(&l_s_approvallist, "3", " ");
+   End-If;
+   Return LTrim(RTrim(&l_s_approvallist, " "), " ");
+end-method;
+
+method SetALMPromptSQL
+   Local string &l_s_srcbu = " ";
+   Local array of array of string &l_as_promptsql = CreateArrayRept(CreateArrayRept("", 0), 0);
+   
+   If IN_SW_SEL_3_WRK.SELECT_WOLINES = "Y" Then
+      &l_s_srcbu = &i_o_SelectionTemplate.GetValue("SOURCE_BUS_UNIT");
+   End-If;
+   &l_as_promptsql.Push("WO_TYPE");
+   &l_as_promptsql [1].Push(" SELECT DISTINCT WO_TYPE  ,DESCR   FROM PS_IN_SW_WOTYP_DVW where SOURCE_BUS_UNIT ='" | &l_s_srcbu | "' ");
+   
+   &l_as_promptsql.Push("SHOP_ID");
+   &l_as_promptsql [2].Push("SELECT DISTINCT SHOP_ID FROM PS_WM_WO_HDR WHERE SHOP_ID<>' ' AND BUSINESS_UNIT='" | &l_s_srcbu | "' ");
+   &i_o_SelectionTemplate.SeedMultiplePromptFieldSQLTextFromTo(&l_as_promptsql);
+end-method;
+
+/**
+* Computes the Minimum complete kit quantity for a schedule
+* @param1  Record containing the demand keys
+* @return minimum complete kit if exist, else returns 0
+*
+*	LOGIC from 9.0 KIT FDD.
+*	The Kit Release Quantity for a particular order schedule line is calculated as follows:
+*	Retrieve all the unique kit component demand lines from IN_DEMAND that (a) match the order key of the order schedule line (regardless of whether they match the Shortage Workbench selection criteria), (b) are in an Unfulfilled or Releasable state, and (c) are required (i.e. Optional Ship flag = No)
+*	For each kit component demand line, calculate its working quantity:
+*		If the kit component is soft-reserved: working quantity = quantity reserved
+*		If the kit component is ATP: working quantity = quantity promised
+*		If the kit component is non-soft and non-ATP:
+*		If the override quantity > 0: working quantity = override quantity
+*		If the override quantity = 0: working quantity = quantity requested – quantity backordered
+*		For each kit component demand line, calculate the number of complete kits its working quantity represents:
+*		If Quantity Code = ASY: number of complete kits = working quantity / Quantity Per
+*		If Quantity Code = ORD:
+*			If working quantity = Quantity Per: number of complete kits = Quantity Per
+*			If working quantity < Quantity Per: number of complete kits = 0
+*		Calculate the Kit Release Quantity:
+*		Start by setting Kit Release Quantity = the minimum number of complete kits from the list of per-assembly (i.e. Quantity Code = ASY) kit component demand lines
+*		Then, if a per-order (i.e. Quantity Code = ORD) kit component demand line exists with number of complete kits = 0, override the Kit Release Quantity to 0
+*
+*
+*/
+method ComputeCompleteKitQty
+   /+ &a_rec_kitdtl as Record +/
+   /+ Returns Number +/
+   Local string &l_s_resultset = "SELECT A.QTY_PER, A.QTY_CODE, A.QTY_REQUESTED_BASE, A.QTY_ALLOC_BASE, A.QTY_PICK_OVR_BASE, A.QTY_PROMISED_BASE, A.QTY_BACKORDER_BASE,B.PROMISE_OPTION,C.SOFT_ALLOC_FLG ";
+   Local string &l_s_from1 = " FROM PS_IN_DEMAND A, PS_MASTER_ITEM_TBL B, PS_DF_SETUP_INV C ";
+   Local string &l_s_from2 = " FROM PS_IN_DEMAND A, PS_MASTER_ITEM_TBL B, PS_DF_SETUP_IT_INV C ";
+   Local string &l_s_where1 = " WHERE A.IN_FULFILL_STATE IN ('20','30') AND A.OPTIONAL_SHIP = 'N' AND A.INV_ITEM_ID = B.INV_ITEM_ID AND A.BUSINESS_UNIT = C.BUSINESS_UNIT AND A.PRODUCT_ID <> ' ' AND A.BUSINESS_UNIT='" | &a_rec_kitdtl.BUSINESS_UNIT.Value | "'  AND A.DEMAND_SOURCE='" | &a_rec_kitdtl.DEMAND_SOURCE.Value | "'  AND A.SOURCE_BUS_UNIT='" | &a_rec_kitdtl.SOURCE_BUS_UNIT.Value | "'  AND A.ORDER_NO='" | &a_rec_kitdtl.ORDER_NO.Value | "'  AND A.ORDER_INT_LINE_NO=" | &a_rec_kitdtl.ORDER_INT_LINE_NO.Value | "  AND A.SCHED_LINE_NBR=" | &a_rec_kitdtl.SCHED_LINE_NBR.Value | "   AND A.PARENT_PROD_ID<>' ' AND A.PARENT_PROD_ID IS NOT NULL AND A.PARENT_PROD_ID='" | &a_rec_kitdtl.PARENT_PROD_ID.Value | "' ";
+   Local string &l_s_where2 = " WHERE A.IN_FULFILL_STATE IN ('20','30') AND A.OPTIONAL_SHIP = 'N' AND A.INV_ITEM_ID = B.INV_ITEM_ID AND A.BUSINESS_UNIT = C.BUSINESS_UNIT AND A.INV_ITEM_ID = C.INV_ITEM_ID AND A.PRODUCT_ID <> ' ' AND A.BUSINESS_UNIT='" | &a_rec_kitdtl.BUSINESS_UNIT.Value | "'  AND A.DEMAND_SOURCE='" | &a_rec_kitdtl.DEMAND_SOURCE.Value | "'  AND A.SOURCE_BUS_UNIT='" | &a_rec_kitdtl.SOURCE_BUS_UNIT.Value | "'  AND A.ORDER_NO='" | &a_rec_kitdtl.ORDER_NO.Value | "'  AND A.ORDER_INT_LINE_NO=" | &a_rec_kitdtl.ORDER_INT_LINE_NO.Value | "  AND A.SCHED_LINE_NBR=" | &a_rec_kitdtl.SCHED_LINE_NBR.Value | "   AND A.PARENT_PROD_ID<>' ' AND A.PARENT_PROD_ID IS NOT NULL AND A.PARENT_PROD_ID='" | &a_rec_kitdtl.PARENT_PROD_ID.Value | "' ";
+   Local string &l_s_sql = "           WHERE 1=0 UNION " | &l_s_resultset | &l_s_from1 | &l_s_where1 | " UNION " | &l_s_resultset | &l_s_from2 | &l_s_where2;
+   
+   
+   Local Rowset &l_rset_kittemp = CreateRowset(Record.IN_SW_KITDTL_VW); /* create a rowset for the kit demand lines */
+   Local integer &l_i_retcode = &l_rset_kittemp.Fill(&l_s_sql); /* retrieve the demand lines for the kit */
+   Local number &l_n_working_qty, &l_n_min_qty;
+   Local integer &i;
+   Local Record &l_rec_dmndline;
+   Local boolean &l_b_zeroperord;
+   &l_n_min_qty = 99999999999999;
+   For &i = 1 To &l_i_retcode
+      &l_rec_dmndline = &l_rset_kittemp(&i).IN_SW_KITDTL_VW;
+      
+      /* Compute the working quantity based on demand type */
+      If &l_rec_dmndline.SOFT_ALLOC_FLG.Value = "Y" Then
+         &l_n_working_qty = &l_rec_dmndline.QTY_ALLOC_BASE.Value;
+      Else
+         If &l_rec_dmndline.PROMISE_OPTION.Value = "2" Then
+            &l_n_working_qty = &l_rec_dmndline.QTY_PROMISED_BASE.Value;
+         Else
+            If &l_rec_dmndline.QTY_PICK_OVR_BASE.Value > 0 Then
+               &l_n_working_qty = &l_rec_dmndline.QTY_PICK_OVR_BASE.Value;
+            Else
+               &l_n_working_qty = &l_rec_dmndline.QTY_REQUESTED_BASE.Value - &l_rec_dmndline.QTY_BACKORDER_BASE.Value;
+            End-If;
+         End-If;
+      End-If;
+      If &l_rec_dmndline.QTY_CODE.Value = "ASY" Then
+         /* Compute the number of multiple of the qty per  for each product */
+         If &l_rec_dmndline.QTY_PER.Value > 0 Then
+            &l_n_working_qty = &l_n_working_qty / &l_rec_dmndline.QTY_PER.Value;
+         Else
+            &l_n_working_qty = 0;
+         End-If;
+         
+         /* Compute the minimum number of complete kits*/
+         If &l_n_min_qty > &l_n_working_qty Then
+            &l_n_min_qty = &l_n_working_qty;
+         End-If;
+      Else
+         /* Computer working qty for Per ORD demand lines */
+         If &l_n_working_qty < &l_rec_dmndline.QTY_PER.Value Then
+            &l_b_zeroperord = True;
+         End-If;
+      End-If;
+   End-For;
+   If &l_b_zeroperord Or
+         (&l_n_min_qty = 99999999999999) Then
+      &l_n_min_qty = 0;
+   End-If;
+   
+   Return &l_n_min_qty;
+end-method;
+
+/**
+* Defaults in the reason code and comments field
+* @param1  row Demand line row
+* @param1  record Record that has the default value to be propagated
+ * @Return none
+*/
+method DefaultReasonCD
+   /+ &a_rset_demandlines as Rowset, +/
+   /+ &a_rec_dfltrecordname as Record +/
+   
+   If All(&a_rec_dfltrecordname.REASON_CD.Value) Or
+         All(&a_rec_dfltrecordname.COMMENTS_254.Value) Then
+      Local string &l_s_recordname = "RECORD." | &a_rset_demandlines.DBRecordName;
+      Local integer &i, &l_i_rowcount;
+      Local string &l_s_reasoncd = &a_rec_dfltrecordname.REASON_CD.Value;
+      Local string &l_s_comments = &a_rec_dfltrecordname.COMMENTS_254.Value;
+      Local Record &l_rec_dmnd;
+      &l_i_rowcount = &a_rset_demandlines.ActiveRowCount;
+      /* insert rows into temp tables */
+      For &i = 1 To &l_i_rowcount
+         &l_rec_dmnd = &a_rset_demandlines(&i).GetRecord(@(&l_s_recordname));
+         
+         If &a_rset_demandlines(&i).IN_SW_SEL_3_WRK.SELECT_CB.Enabled And
+               &a_rset_demandlines(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "Y" Then
+            <* And                &l_rec_dmnd.DEMAND_SOURCE.Value = "WO" Then *>
+            &l_rec_dmnd.REASON_CD.Value = &l_s_reasoncd;
+            &l_rec_dmnd.COMMENTS_254.Value = &l_s_comments;
+         End-If;
+      End-For;
+   End-If;
+end-method;
+
+/**
+*  Navigates from Kit summary to Kit schedule within the same page.
+* @param  None
+* @return none
+*
+*/
+method GotoKitSchedule
+   Local Rowset &l_rset_ordp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW);
+   Local integer &i, &l_i_rowcount;
+   Local string &l_s_kitid_sql = " ";
+   Local boolean &l_b_notfirst;
+   &l_i_rowcount = &l_rset_ordp.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      If &l_rset_ordp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "Y" Then
+         If &l_b_notfirst Then
+            &l_s_kitid_sql = &l_s_kitid_sql | " OR ";
+         End-If;
+         &l_s_kitid_sql = &l_s_kitid_sql | " (A.PARENT_PROD_ID='" | &l_rset_ordp(&i).IN_SW_ORDP_1_VW.PARENT_PROD_ID.Value | "' AND A.SOURCE_BUS_UNIT='" | &l_rset_ordp(&i).IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value | "') ";
+         &l_b_notfirst = True;
+      End-If;
+      
+   End-For;
+   
+   If &l_s_kitid_sql <> "" And
+         &l_s_kitid_sql <> " " Then
+      &l_s_kitid_sql = " AND (" | &l_s_kitid_sql | ") ";
+      &l_rset_ordp.Flush();
+      IN_SW_SEL_3_WRK.IN_SW_SHWITEM = "D";
+      Local integer &l_i_retcode = &i_o_SelectionTemplate.SetDisplayRowsetValue("IN_SW_SHWITEM", IN_SW_SEL_3_WRK.IN_SW_SHWITEM);
+      If %This.RefreshOrders(&l_s_kitid_sql) Then
+         If Not (&p_bInitFromWorkcenter) Then
+            IN_SW_SEL_3_WRK.DESCRLONG = &i_o_SelectionTemplate.GetCriteriaString();
+         Else
+            IN_SW_SEL_3_WRK.DESCRLONG = IN_SW_SEL_3_WRK.DESCRLONG | Char(13) | Char(10) | &i_o_SelectionTemplate.GetCriteriaString();
+         End-If;
+         Local Grid &l_g_demand = GetGrid(Page.IN_SW_ORDERPOOL, "IN_SW_ORDP_1_VW");
+         &l_g_demand.GetColumn("G_PARENT_PROD_ID").Label = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW)(1).IN_SW_SEL_3_WRK.PARENT_PROD_ID.GetLongLabel("KIT_ID");
+         &l_g_demand.Label = MsgGetText(11100, 2851, "Kit Detail Summary");
+         
+      Else
+         /*ADD Message that no rows match this search conditions */
+         MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria.");
+      End-If;
+   End-If;
+end-method;
+
+/**
+*  Formats Order summary Data
+* @param  None
+* @return none
+*
+*/
+method FormatOrderSummary
+   /+ &a_b_hiderowsetifempty as Boolean +/
+   /+ Returns Boolean +/
+   
+   Local string &l_s_resultset, &l_s_CFG_KIT_FLAG;
+   Local boolean &l_b_itemlist;
+   Local integer &l_i_retcode;
+   Local Rowset &l_rset_ordp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW);
+   If &a_b_hiderowsetifempty Then
+      Local boolean &l_b_orders = &i_o_INUtilities.HideRowsetIfEmpty(&l_rset_ordp, "IN_SW_ORDP_1_VW", "IN_SW_SHWITEM");
+   End-If;
+   GetLevel0()(1).IN_SW_SEL_3_WRK.IN_FW_SELECTALL.Visible = &l_b_orders;
+   
+   Local Record &l_rec_selectall = GetLevel0()(1).IN_SW_SEL_3_WRK;
+   &l_rec_selectall.IN_FW_SEL_ALL.Visible = &l_b_orders;
+   &l_rec_selectall.IN_FW_SEL_NONE.Visible = &l_b_orders;
+   
+   Local integer &i, &l_i_rowcount;
+   Local Record &l_rec_orders, &l_rec_wrk;
+   &l_i_rowcount = &l_rset_ordp.ActiveRowCount;
+   For &i = 1 To &l_i_rowcount
+      &l_rec_orders = &l_rset_ordp(&i).IN_SW_ORDP_1_VW;
+      &l_rec_wrk = &l_rset_ordp(&i).IN_SW_SEL_3_WRK;
+      Evaluate IN_SW_SEL_3_WRK.IN_SW_SHWITEM
+      When = "Y" /* item list */
+         &l_rec_wrk.IN_FW_DMD_LINE_BTN.Visible = False;
+         &l_rec_wrk.INV_ITEM_ID.Visible = True;
+         &l_rec_orders.DEMAND_SOURCE.Visible = False;
+         &l_rec_orders.SOURCE_BUS_UNIT.Visible = False;
+         &l_rec_orders.ORDER_NO.Visible = False;
+         &l_rec_wrk.INV_ITEM_ID.Label = &l_rec_orders.INV_ITEM_ID.Value;
+         &l_rset_ordp(&i).MASTER_ITEM_TBL.DESCR.Visible = True;
+         &l_rec_wrk.PARENT_PROD_ID.Visible = False;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Visible = False;
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Visible = False;
+         &l_rec_wrk.MAX_KIT_QTY.Visible = False;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Visible = False;
+         &l_rec_wrk.SELECT_CB.Visible = True;
+         &l_rec_wrk.SELECT_CB1.Visible = False;
+         &l_rec_wrk.IN_SW_KIT_DTL_BTN.Visible = False;
+         Break;
+      When = "N" /* Order list */
+         &l_rec_wrk.IN_FW_DMD_LINE_BTN.Visible = True;
+         &l_rec_orders.DEMAND_SOURCE.Visible = True;
+         &l_rec_orders.SOURCE_BUS_UNIT.Visible = True;
+         &l_rec_orders.ORDER_NO.Visible = True;
+         &l_rec_wrk.INV_ITEM_ID.Visible = False;
+         &l_rset_ordp(&i).MASTER_ITEM_TBL.DESCR.Visible = True;
+         &l_rec_wrk.PARENT_PROD_ID.Visible = False;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Visible = False;
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Visible = False;
+         &l_rec_wrk.MAX_KIT_QTY.Visible = False;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Visible = False;
+         &l_rec_wrk.SELECT_CB.Visible = Tru
+         &l_rec_wrk.SELECT_CB1.Visible = False;
+         &l_rec_wrk.IN_SW_KIT_DTL_BTN.Visible = False;
+         Break;
+      When = "K" /*kit summary list */
+         &l_rec_wrk.IN_FW_DMD_LINE_BTN.Visible = True;
+         &l_rec_orders.DEMAND_SOURCE.Visible = False;
+         &l_rec_orders.SOURCE_BUS_UNIT.Visible = True;
+         &l_rec_orders.ORDER_NO.Visible = False;
+         &l_rec_wrk.INV_ITEM_ID.Visible = False;
+         &l_rset_ordp(&i).MASTER_ITEM_TBL.DESCR.Visible = False;
+         &l_rec_wrk.PARENT_PROD_ID.Visible = True;
+         &l_rec_wrk.PARENT_PROD_ID.Label = &l_rec_orders.PARENT_PROD_ID.Value;
+         
+         <* ICE: 1536251001 START if configured kit display the kit id but disable the kit id hyperlink *>
+         SQLExec("SELECT A.CFG_KIT_FLAG FROM PS_PROD_ITEM A, PS_SET_CNTRL_REC B WHERE A.SETID = B.SETID AND A.PRODUCT_ID = :1 AND B.SETCNTRLVALUE =:2 AND B.REC_GROUP_ID = 'FS_18' AND B.RECNAME = 'PROD_ITEM' ", &l_rec_orders.PARENT_PROD_ID.Value, &l_rec_orders.BUSINESS_UNIT.Value, &l_s_CFG_KIT_FLAG);
+         If &l_s_CFG_KIT_FLAG = "Y" Then
+            &l_rec_wrk.PARENT_PROD_ID.Enabled = False;
+         Else
+            &l_rec_wrk.PARENT_PROD_ID.Enabled = True;
+         End-If;
+         <* ICE: 1536251001 END if configured kit display the kit id but disable the kit id hyperlink *>
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Visible = False;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Visible = False;
+         &l_rec_wrk.MAX_KIT_QTY.Visible = False;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Visible = False;
+         &l_rec_wrk.SELECT_CB.Visible = False;
+         &l_rec_wrk.SELECT_CB1.Visible = True;
+         Break;
+      When = "D" /*kit Detail list */
+         &l_rec_wrk.IN_FW_DMD_LINE_BTN.Visible = True;
+         &l_rec_orders.DEMAND_SOURCE.Visible = False;
+         &l_rec_orders.SOURCE_BUS_UNIT.Visible = True;
+         &l_rec_orders.ORDER_NO.Visible = False;
+         &l_rec_wrk.INV_ITEM_ID.Visible = False;
+         &l_rset_ordp(&i).MASTER_ITEM_TBL.DESCR.Visible = False;
+         &l_rec_wrk.PARENT_PROD_ID.Visible = True;
+         &l_rec_wrk.PARENT_PROD_ID.Label = &l_rec_orders.PARENT_PROD_ID.Value;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Visible = True;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Value = &l_rec_orders.ORDER_NO.Value | "/" | &l_rec_orders.ORDER_INT_LINE_NO.Value | "/" | &l_rec_orders.SCHED_LINE_NBR.Value;
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Visible = True;
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Value = &l_rec_orders.DEMAND_SOURCE.Value | "/" | &l_rec_orders.SOURCE_BUS_UNIT.Value;
+         &l_rec_wrk.MAX_KIT_QTY.Value = %This.ComputeCompleteKitQty(&l_rec_orders);
+         &l_rec_wrk.MAX_KIT_QTY.Visible = True;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Value = &l_rec_orders.DP_KIT_PARENT_QTY.Value;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Visible = True;
+         If IN_SW_SEL_3_WRK.IN_SW_SHWITEM = "K" Then
+            &l_rec_wrk.SELECT_CB.Visible = False;
+            &l_rec_wrk.SELECT_CB1.Visible = True;
+         Else
+            &l_rec_wrk.SELECT_CB.Visible = True;
+            &l_rec_wrk.SELECT_CB1.Visible = False;
+         End-If;
+         &l_rec_wrk.IN_SW_KIT_DTL_BTN.Visible = False;
+         Break;
+         
+      End-Evaluate;
+      
+      If %This.PromptForReasonCode <> "N" Then
+         &l_rec_orders.REASON_CD.Visible = True;
+         &l_rec_orders.COMMENTS_254.Visible = True;
+      Else
+         &l_rec_orders.REASON_CD.Visible = False;
+         &l_rec_orders.COMMENTS_254.Visible = False;
+      End-If;
+   End-For;
+   Return &l_b_orders;
+end-method;
+
+/**
+*  Navigates from Kit summary to Kit schedule within the same page.
+* @param  None
+* @return none
+*
+*/
+method GotoKitScheduleInline
+   /+ &a_s_kitid_sql as String, +/
+   /+ &a_i_currentrow as Integer +/
+   /+ Returns Boolean +/
+   Local Rowset &l_rset_ordp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW);
+   Local integer &l_i_rowcount = &l_rset_ordp.ActiveRowCount;
+   Local integer &i;
+   
+   
+   If &a_i_currentrow > 0 Then
+      &l_rset_ordp(&a_i_currentrow).IN_SW_SEL_3_WRK.IN_SW_KIT_DTL_BTN.Visible = False;
+   Else
+      For &i = 1 To &l_i_rowcount
+         &l_rset_ordp(&i).IN_SW_SEL_3_WRK.IN_SW_KIT_DTL_BTN.Visible = False;
+      End-For;
+   End-If;
+   
+   Local string &l_s_reqfieldmissing;
+   If Not &i_o_SelectionTemplate.CheckRequiredField(&l_s_reqfieldmissing) Then
+      MessageBox(0, "", 11100, 1969, "Template Definition does not exist.", &l_s_reqfieldmissing);
+      Return False;
+   End-If;
+   %This.CheckOrderRequestDay();
+   
+   Local string &l_s_resultset = "SELECT DISTINCT A.BUSINESS_UNIT, A.DEMAND_SOURCE, A.SOURCE_BUS_UNIT, ORDER_NO,ORDER_INT_LINE_NO,SCHED_LINE_NBR,' ',A.PARENT_PROD_ID,' ',' ',DP_KIT_PARENT_QTY,'D'"; /* ,A1.SOFT_ALLOC_FLG*/
+   Local integer &l_i_retcode = %This.RetrieveDemandDynamic(&l_rset_ordp, &l_s_resultset, " AND A.PARENT_PROD_ID<>' ' " | &a_s_kitid_sql);
+   
+   
+   If &l_i_retcode > 0 Then
+      Local string &l_s_indent = "+    ";
+      Local Record &l_rec_orders, &l_rec_wrk;
+      Local integer &l_i_rowcountnew = &l_rset_ordp.ActiveRowCount;
+      For &i = &l_i_rowcount + 1 To &l_i_rowcountnew
+         &l_rec_orders = &l_rset_ordp(&i).IN_SW_ORDP_1_VW;
+         &l_rec_wrk = &l_rset_ordp(&i).IN_SW_SEL_3_WRK;
+         &l_rec_wrk.IN_SW_KIT_DTL_BTN.Visible = False;
+         
+         &l_rec_wrk.IN_FW_DMD_LINE_BTN.Visible = True;
+         &l_rec_orders.DEMAND_SOURCE.Visible = False;
+         &l_rec_orders.SOURCE_BUS_UNIT.Visible = False;
+         &l_rec_orders.ORDER_NO.Visible = False;
+         &l_rec_wrk.INV_ITEM_ID.Visible = False;
+         &l_rset_ordp(&i).MASTER_ITEM_TBL.DESCR.Visible = False;
+         &l_rec_wrk.PARENT_PROD_ID.Visible = True;
+         &l_rec_wrk.PARENT_PROD_ID.Label = &l_s_indent | &l_rec_orders.PARENT_PROD_ID.Value;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Visible = True;
+         &l_rec_wrk.IN_SW_ORDER_KEY.Value = &l_rec_orders.ORDER_NO.Value | "/" | &l_rec_orders.ORDER_INT_LINE_NO.Value | "/" | &l_rec_orders.SCHED_LINE_NBR.Value;
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Visible = True;
+         &l_rec_wrk.IN_SW_SOURCE_KEY.Value = &l_rec_orders.DEMAND_SOURCE.Value | "/" | &l_rec_orders.SOURCE_BUS_UNIT.Value;
+         &l_rec_wrk.MAX_KIT_QTY.Value = %This.ComputeCompleteKitQty(&l_rec_orders);
+         &l_rec_wrk.MAX_KIT_QTY.Visible = True;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Value = &l_rec_orders.DP_KIT_PARENT_QTY.Value;
+         &l_rset_ordp(&i).IN_SW_PRDKT_WRK.QTY_KIT.Visible = True;
+         &l_rec_wrk.SELECT_CB.Visible = False;
+         &l_rec_wrk.SELECT_CB1.Visible = True;
+         If %This.PromptForReasonCode <> "N" Then
+            &l_rec_orders.REASON_CD.Visible = True;
+            &l_rec_orders.COMMENTS_254.Visible = True;
+         Else
+            &l_rec_orders.REASON_CD.Visible = False;
+            &l_rec_orders.COMMENTS_254.Visible = False;
+         End-If;
+      End-For;
+      &l_rset_ordp.Sort(IN_SW_ORDP_1_VW.PARENT_PROD_ID, "A", IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT, "A", IN_SW_SEL_3_WRK.IN_SW_SOURCE_KEY, "A", IN_SW_SEL_3_WRK.IN_SW_ORDER_KEY, "A");
+      If &l_rset_ordp.ActiveRowCount > 0 Then
+         Return True;
+      Else
+         MessageBox(0, "", 11100, 1950, "No Demand Lines Match this criteria.");
+         Return False;
+      End-If;
+   End-If;
+   Return False;
+end-method;
+
+/**
+*  unselect kit detail if kit schedule is selected and viceversa
+* @param  page name
+* @return none
+*
+*/
+method SelectcontrolforKitSUmmary
+   Local Record &l_rec_order = GetRow().IN_SW_ORDP_1_VW;
+   Local Record &l_rec_wrk = GetRow().IN_SW_SEL_3_WRK;
+   If &l_rec_wrk.SELECT_CB1.Enabled Then
+      
+      &l_rec_wrk.SELECT_CB.Value = &l_rec_wrk.SELECT_CB1.Value;
+      
+      If &l_rec_wrk.SELECT_CB1.Value = "Y" Then
+         Local string &l_s_kitid = &l_rec_order.PARENT_PROD_ID.Value;
+         Local string &l_s_srcbu = &l_rec_order.SOURCE_BUS_UNIT.Value;
+         Local Rowset &l_rset_ordp = GetRow().ParentRowset;
+         Local integer &l_i_rowcount = &l_rset_ordp.ActiveRowCount;
+         Local integer &i = GetRow().RowNumber;
+         If &l_rec_order.IN_SW_SHWITEM.Value = "K" Then /* kit summary */
+            /* check if kit details are selected then unselect them */
+            &i = &i + 1;
+            While &i <= &l_i_rowcount
+               If &l_s_kitid = &l_rset_ordp(&i).IN_SW_ORDP_1_VW.PARENT_PROD_ID.Value And
+                     &l_s_srcbu = &l_rset_ordp(&i).IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value Then
+                  &l_rset_ordp(&i).IN_SW_SEL_3_WRK.SELECT_CB1.Value = "N";
+                  &l_rset_ordp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "N";
+                  &i = &i + 1;
+               Else
+                  &i = &l_i_rowcount + 5;
+               End-If;
+            End-While;
+            
+         Else /* check if Kit id summary for this schedule is selected and if selected unselect it*/
+            &i = &i - 1;
+            While &i >= 1
+               If &l_s_kitid = &l_rset_ordp(&i).IN_SW_ORDP_1_VW.PARENT_PROD_ID.Value And
+                     &l_s_srcbu = &l_rset_ordp(&i).IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value Then
+                  If Not (&l_rset_ordp(&i).IN_SW_SEL_3_WRK.IN_SW_ORDER_KEY.Visible) Then
+                     &l_rset_ordp(&i).IN_SW_SEL_3_WRK.SELECT_CB.Value = "N";
+                     &l_rset_ordp(&i).IN_SW_SEL_3_WRK.SELECT_CB1.Value = "N";
+                  End-If;
+                  &i = &i - 1;
+               Else
+                  &i = 0;
+               End-If;
+            End-While;
+            
+         End-If;
+      End-If;
+   End-If;
+   
+end-method;
+
+/**
+*  Collapse and Expand Kit Schedule
+* @param  page name
+* @return none
+*
+*/
+method CollapseExpandKitSchedule
+   /+ &a_b_expand as Boolean +/
+   
+   Local Rowset &l_rset_ordp = GetLevel0()(1).GetRowset(Scroll.IN_SW_ORDP_1_VW);
+   Local integer &i, &l_i_rowcount;
+   &l_i_rowcount = &l_rset_ordp.ActiveRowCount;
+   For &i = &l_i_rowcount To 1 Step - 1
+      If &l_rset_ordp(&i).IN_SW_ORDP_1_VW.IN_SW_SHWITEM.Value = "D" Then
+         &l_rset_ordp.DeleteRow(&i);
+      Else
+         &l_rset_ordp(&i).IN_SW_SEL_3_WRK.IN_SW_KIT_DTL_BTN.Visible = True;
+      End-If;
+   End-For;
+   
+   If &a_b_expand Then
+      Local string &l_s_kitid_sql;
+      Local boolean &l_b_first = True;
+      &l_i_rowcount = &l_rset_ordp.ActiveRowCount;
+      For &i = 1 To &l_i_rowcount
+         If &l_rset_ordp(&i).IN_SW_ORDP_1_VW.IN_SW_SHWITEM.Value = "K" Then
+            If Not &l_b_first Then
+               &l_s_kitid_sql = &l_s_kitid_sql | " OR ";
+            End-If;
+            &l_s_kitid_sql = &l_s_kitid_sql | " (A.PARENT_PROD_ID='" | &l_rset_ordp(&i).IN_SW_ORDP_1_VW.PARENT_PROD_ID.Value | "' AND A.SOURCE_BUS_UNIT='" | &l_rset_ordp(&i).IN_SW_ORDP_1_VW.SOURCE_BUS_UNIT.Value | "') ";
+            &l_b_first = False;
+         End-If;
+      End-For;
+      If &l_s_kitid_sql <> "" And
+            &l_s_kitid_sql <> " " Then
+         &l_s_kitid_sql = " AND (" | &l_s_kitid_sql | ") ";
+         Local boolean &l_b_retcode = %This.GotoKitScheduleInline(&l_s_kitid_sql, 0);
+      End-If;
+   End-If;
+end-method;
+
