@@ -1,6 +1,6 @@
 ### BUSINESS_UNIT
 ```
-Business Unit
+    Business Unit
 ```
 ### PROCESS_INSTANCE
 ```
@@ -8,7 +8,7 @@ Business Unit
 ```
 ### JOURNAL_DATE
 ```
-    Date the Joural run go Gl
+    Date the Journal go to GL
 ```
 ### FISCAL_YEAR
 ```
@@ -24,7 +24,7 @@ Business Unit
 ```
 ### INVOICE
 ```
-    Invoice for Order. One order may have multiple innvoice. One invoice may have multiple line
+    Invoice for Order. One order may have multiple invoices. One invoice may have multiple lines
 ```
 ### INVOICE_TYPE
 ```
@@ -49,7 +49,7 @@ Business Unit
 ```
 ### LINE_SEQ_NUM
 ```
-    invoice's line_seq_num
+    Invoice's line_seq_num
 ```
 ### PRODUCT_ID
 ```
@@ -65,7 +65,7 @@ Business Unit
 ```
 ### UNIT_OF_MEASURE
 ```
-    Product's Unit of Meaasure
+    Product's Unit of Measure
 ```
 ### ORDER_NO
 ```
@@ -77,7 +77,7 @@ Business Unit
 ```
 ### GROSS_EXTENDED_AMT
 ```
-    ps_bi_acct_entry.monetary_amount(account: ('400110', '400111', '400140', '260000') ) -- I think there is no Tax* Will check later
+    ps_bi_acct_entry.monetary_amount(account: ('400110', '400111', '400140', '260000') ) -- I think there is no tax*  I will check later.
 ```
 ### LINE_COST
 ```
@@ -97,7 +97,7 @@ Business Unit
 ```
 ### DROP_SHIP_FLAG
 ```
-    Y: Dropship line; 
+    Y: Dropship line 
 ```
 ### K_COMM_TYPE
 ```
@@ -156,8 +156,8 @@ Business Unit
 ```
 ### WORK_ORDER_SOURCE
 ```
-    ps_km_ord_header. WORK_ORDER_SOURCE
-        Possible value:
+    ps_km_ord_header.work_order_source
+        Possible values:
             XM SR K1 BY AF PK AD VO CH ND TG
             MA PD GR KR XC WM RK EB KT XL OC
             GO OS QT KA IN AZ JT PA WS GC AO
@@ -166,7 +166,7 @@ Business Unit
 ### SOURCE_CD
 ```
     ps_ord_header.source_cd
-        Possible value:
+        Possible values:
             EMAIL  MAIL   SHIP   SHOP   RMA    WALMRT
             FAX    TARGET VOIC   NORD   SHOWRM LOST
             SLSREP RAKUT  MCHLS  KTOYS  DEF    CSC
@@ -211,7 +211,7 @@ Business Unit
 ```
 ### K_BILLRPT_SUBGRP4
 ```
-    subcustqual      : check for subcust_qual1|| subcust_qual2
+    subcustqual      : subcust_qual1|| subcust_qual2
         041	    Head Start
         042	    Schools
         043	    For Profit
@@ -222,7 +222,7 @@ Business Unit
 ### K_BILLRPT_SUBGRP5
 
 ```
-    ord_source        : check for ps_km_ord_header.work_order_source
+    ord_source        : ps_km_ord_header.work_order_source
     051	    Public Web
     052	    Platinum
     053	    cXML
