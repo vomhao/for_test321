@@ -77,7 +77,7 @@
 ```
 ### GROSS_EXTENDED_AMT
 ```
-    ps_bi_acct_entry.monetary_amount(account: ('400110', '400111', '400140', '260000') ) -- I think there is no tax*  I will check later.
+    ps_bi_acct_entry.monetary_amount(account: ('400110', '400111', '400140', '260000') ) -- No Tax & No Freight.
 ```
 ### LINE_COST
 ```
